@@ -13,6 +13,7 @@
 pub use self::win::Win;
 
 use dc::DeviceContext;
+use mutation_writer::MutationWriter;
 use win::MainWindow;
 use win_create_args::WinCreateArgs;
 use windows::{
@@ -23,11 +24,40 @@ use windows::{
     },
 };
 
+use dioxus_core::{Element, ElementId, Mutations, ScopeId, VirtualDom, WriteMutations};
+
 pub mod dc;
 pub mod kbd;
 pub mod mouse;
+pub mod mutation_writer;
 pub mod win;
 pub mod win_create_args;
+
+pub fn launch(app: fn() -> Element) {
+    launch_vdom(&mut VirtualDom::new(app));
+}
+
+pub fn launch_vdom(vdom: &mut VirtualDom) {
+    render(vdom);
+}
+
+// hwnd could be used as the id. You then modify/destroy windows (controls)
+//
+pub fn render(vdom: &mut VirtualDom) -> Result<()> {
+    let create_args = WinCreateArgs {
+        instance: HINSTANCE::default(),
+        window_height: 400,
+        window_width: 600,
+        //     & !(WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE),
+        ..WinCreateArgs::default_win_main()
+    };
+    let mut app = WPApp::<MainWindow>::new_with_config(create_args);
+    vdom.rebuild(&mut app);
+
+    app.init(w!("testing"))?;
+    app.run(|app| {});
+    Ok(())
+}
 
 pub enum SendMessageParams {
     Close,
@@ -376,7 +406,10 @@ impl<T: Win> WPApp<T> {
         }
     }
 
-    pub fn run(&mut self) -> () {
+    pub fn run<F>(&mut self, mut f: F) -> ()
+    where
+        F: FnMut(&mut Self) -> (),
+    {
         self.main_win.show();
         self.main_win.update();
 
@@ -402,9 +435,74 @@ impl<T: Win> WPApp<T> {
                 Self::translate_message(&msg);
                 Self::dispatch_message(&msg);
             }
+            f(self);
         }
 
         self.exit_code = msg.wParam
+    }
+}
+
+impl<T: Win> WriteMutations for WPApp<T> {
+    fn append_children(&mut self, id: ElementId, m: usize) {}
+
+    fn assign_node_id(&mut self, path: &'static [u8], id: ElementId) {
+        todo!()
+    }
+
+    fn create_placeholder(&mut self, id: ElementId) {
+        todo!()
+    }
+
+    fn create_text_node(&mut self, value: &str, id: ElementId) {
+        todo!()
+    }
+
+    fn load_template(&mut self, template: dioxus_core::Template, index: usize, id: ElementId) {}
+
+    fn replace_node_with(&mut self, id: ElementId, m: usize) {
+        todo!()
+    }
+
+    fn replace_placeholder_with_nodes(&mut self, path: &'static [u8], m: usize) {
+        todo!()
+    }
+
+    fn insert_nodes_after(&mut self, id: ElementId, m: usize) {
+        todo!()
+    }
+
+    fn insert_nodes_before(&mut self, id: ElementId, m: usize) {
+        todo!()
+    }
+
+    fn set_attribute(
+        &mut self,
+        name: &'static str,
+        ns: Option<&'static str>,
+        value: &dioxus_core::AttributeValue,
+        id: ElementId,
+    ) {
+        todo!()
+    }
+
+    fn set_node_text(&mut self, value: &str, id: ElementId) {
+        todo!()
+    }
+
+    fn create_event_listener(&mut self, name: &'static str, id: ElementId) {
+        todo!()
+    }
+
+    fn remove_event_listener(&mut self, name: &'static str, id: ElementId) {
+        todo!()
+    }
+
+    fn remove_node(&mut self, id: ElementId) {
+        todo!()
+    }
+
+    fn push_root(&mut self, id: ElementId) {
+        todo!()
     }
 }
 
