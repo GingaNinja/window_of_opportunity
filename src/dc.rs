@@ -40,8 +40,26 @@ impl DeviceContext {
         }
     }
 
-    pub fn set_pixel(&self, x: i32, y: i32) -> bool {
-        unsafe { SetPixelV(self.hdc, x, y, COLORREF(0x00FF0000)).as_bool() }
+    pub fn set_pixel(&self, x: i32, y: i32, hex_color: u32) -> bool {
+        unsafe { SetPixelV(self.hdc, x, y, COLORREF(hex_color)).as_bool() }
+    }
+
+    pub fn set_pen_color(&self, hex_color: u32) {
+        unsafe {
+            SetDCPenColor(self.hdc, COLORREF(hex_color));
+        }
+    }
+
+    pub fn set_background_color(&self, hex_color: u32) {
+        unsafe {
+            SetBkColor(self.hdc, COLORREF(hex_color));
+        }
+    }
+
+    pub fn set_background_mode(&self, mode: BACKGROUND_MODE) {
+        unsafe {
+            SetBkMode(self.hdc, mode);
+        }
     }
 
     pub fn draw_text(&self, text: &str, rect: &mut RECT) {
@@ -126,6 +144,40 @@ impl Drop for DeviceContext {
                     let _ = EndPaint(self.hwnd, &ps);
                 }
             };
+        }
+    }
+}
+
+pub struct Pen {
+    style: PEN_STYLE,
+    color: u32,
+    width: i32,
+    pub handle: HPEN,
+}
+
+impl Pen {
+    pub fn new(style: PEN_STYLE, color: u32, width: i32) -> Self {
+        Self {
+            style,
+            color,
+            width,
+            handle: Self::create_pen(style, width, color),
+        }
+    }
+
+    pub fn create_pen(style: PEN_STYLE, width: i32, hex_color: u32) -> HPEN {
+        unsafe { CreatePen(style, width, COLORREF(hex_color)) }
+    }
+
+    pub fn create_pen_indirect(log_pen: &mut LOGPEN) -> HPEN {
+        unsafe { CreatePenIndirect(log_pen) }
+    }
+}
+
+impl Drop for Pen {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = DeleteObject(self.handle);
         }
     }
 }

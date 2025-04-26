@@ -13,6 +13,8 @@
 pub use self::win::Win;
 
 use dc::DeviceContext;
+use win::MainWindow;
+use win_create_args::WinCreateArgs;
 use windows::{
     core::*,
     Win32::{
@@ -61,6 +63,31 @@ pub struct CommandEvent {
     command: i32,
     source_type: SourceType,
     control_hwnd: Option<HWND>,
+}
+
+#[macro_export]
+macro_rules! ui {
+    ( $el:ident
+    $($title:literal)?
+$( $method:ident $methodargs:tt)*
+$({ $($contents:tt)* })? ) => {{
+        #[allow(unused_imports)]
+        use $crate::{WPApp, win_create_args::WinCreateArgs};
+        use windows::{core::*, Win32::Foundation::HINSTANCE};
+        let create_args = WinCreateArgs {
+            instance: HINSTANCE::default(),
+            $( $method: $methodargs, )*
+            //     & !(WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE),
+            ..WinCreateArgs::default_win_main()
+        };
+        let mut app = WPApp::<$el>::new_with_config(create_args);
+        let mut title = PCWSTR::null();
+        $( title = w!($title);)?
+        if (title == PCWSTR::null()) {
+            title = w!("Default");
+        }
+        app
+    }};
 }
 
 #[macro_export]
@@ -251,7 +278,7 @@ impl WPModule {
                 Err(error) => {
                     println!("error getting hinstance: {:?}", error);
                     WPModule {
-                        hinst: HINSTANCE(0),
+                        hinst: HINSTANCE::default(),
                     }
                 }
             }
@@ -268,6 +295,11 @@ pub struct WPApp<T: Win> {
     pub main_win: T,
     exit_code: WPARAM,
     accel: Option<HACCEL>,
+    create_args: Option<WinCreateArgs>,
+}
+
+pub fn new_app_with_main_window() -> WPApp<MainWindow> {
+    WPApp::<MainWindow>::new()
 }
 
 impl<T: Win> WPApp<T> {
@@ -277,15 +309,30 @@ impl<T: Win> WPApp<T> {
 
         // self.main_win = Some(main_win);
         WPApp {
-            module: module,
-            main_win: main_win,
+            module,
+            main_win,
             exit_code: WPARAM(0),
             accel: None,
+            create_args: None,
         }
     }
 
+    pub fn new_with_config(create_args: WinCreateArgs) -> Self {
+        let mut app = Self::new();
+        app.create_args = Some(create_args);
+        app
+    }
+
     pub fn init(&mut self, title: PCWSTR) -> Result<()> {
-        self.main_win.create_window(title)?;
+        match &self.create_args {
+            None => {
+                self.main_win.create_window(title)?;
+            }
+            Some(create_args) => {
+                self.main_win.create_window_with_args(title, create_args)?;
+            }
+        }
+
         match self.load_accelerators() {
             Ok(accel) => self.accel = Some(accel),
             Err(_err) => println!("couldn't load accelerator"),

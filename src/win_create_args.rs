@@ -23,7 +23,7 @@ impl Default for WinCreateArgs {
             class_name: w!(""),
             ex_style: WINDOW_EX_STYLE::default(),
             style: WINDOW_STYLE::default(),
-            instance: HINSTANCE(0),
+            instance: HINSTANCE::default(),
             icon: None,
             cursor: load_cursor(None, IDC_ARROW).unwrap(),
             menu_name: w!(""),

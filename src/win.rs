@@ -1,3 +1,5 @@
+use crate::default_win_impl;
+
 use super::{
     dc::DeviceContext, hword, kbd::KbdEvent, load_icon, lword, mouse::MouseEvent,
     win_create_args::WinCreateArgs, BaseWin, CommandEvent, Event, EventHandled, SendMessageParams,
@@ -25,6 +27,7 @@ pub trait Win {
             ShowWindow(self.get_hwnd(), SW_NORMAL).as_bool()
         }
     }
+    fn set_child(&mut self, child: Component);
 
     fn update(&self) -> bool {
         unsafe { UpdateWindow(self.get_hwnd()).as_bool() }
@@ -100,13 +103,23 @@ pub trait Win {
     }
 
     fn create_window(&mut self, title: PCWSTR) -> Result<HWND>;
+    fn create_window_with_args(
+        &mut self,
+        title: PCWSTR,
+        create_args: &WinCreateArgs,
+    ) -> Result<HWND>;
 
-    fn create_win(&mut self, title: PCWSTR, create_args: WinCreateArgs) -> Result<HWND> {
-        let hwnd: HWND;
+    fn create_win(
+        &mut self,
+        title: PCWSTR,
+        create_args: &WinCreateArgs,
+        instance: HINSTANCE,
+    ) -> std::result::Result<HWND, Error> {
+        let hwnd: std::result::Result<HWND, Error>;
 
         let class_name = create_args.class_name;
 
-        let hinst = create_args.instance;
+        let hinst = instance;
         let brush: HGDIOBJ;
         unsafe {
             brush = GetStockObject(WHITE_BRUSH);
@@ -118,7 +131,7 @@ pub trait Win {
             Some(icon_name) => load_icon(create_args.instance, icon_name),
         };
         let icon = match icon {
-            Err(_) => HICON(0),
+            Err(_) => HICON::default(),
             Ok(icon) => icon,
         };
 
@@ -159,7 +172,7 @@ pub trait Win {
                 Some(self as *const _ as _),
             );
         }
-        Ok(hwnd)
+        hwnd
     }
 
     fn dispatch_event(&mut self, event: &Event) -> LRESULT {
@@ -213,7 +226,7 @@ pub trait Win {
                 let command_event = CommandEvent {
                     command: lword(event.wparam.0 as isize),
                     control_hwnd: if command_type == SourceType::Control {
-                        Some(HWND(event.lparam.0))
+                        Some(HWND(event.lparam.0 as *mut std::ffi::c_void))
                     } else {
                         None
                     },
@@ -233,7 +246,7 @@ pub trait Win {
             unsafe {
                 SetWindowLongPtrW(event.hwnd, GWLP_USERDATA, 0);
             }
-            self.set_hwnd(HWND(0));
+            self.set_hwnd(HWND::default());
             return unsafe {
                 DefWindowProcW(event.hwnd, event.message, event.wparam, event.lparam)
             };
@@ -254,7 +267,7 @@ pub trait Win {
         lparam: LPARAM,
     ) -> LRESULT {
         unsafe {
-            if hwnd.0 == 0 {
+            if hwnd == HWND::default() {
                 return DefWindowProcW(hwnd, message, wparam, lparam);
             }
         }
@@ -305,5 +318,151 @@ pub trait Win {
             lparam: lparam,
         };
         ref_self.dispatch_event(&event)
+    }
+}
+
+pub trait Element {
+    fn create_element(&mut self, parent: HWND, instance: HINSTANCE) -> Result<()>;
+    // we should have a drop for removing elements
+}
+
+pub trait Container {
+    fn add_child(&mut self, child: Component);
+}
+
+pub enum Component {
+    Element(Box<dyn Element>),
+    Container(Box<dyn Container>),
+}
+
+impl Component {
+    fn create_element(&mut self, parent: HWND, instance: HINSTANCE) -> Result<()> {
+        match self {
+            Component::Element(el) => el.create_element(parent, instance),
+            Component::Container(con) => Ok(()),
+        }
+    }
+}
+
+pub struct Button {
+    id: i32,
+    name: PCWSTR,
+    hwnd: HWND,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
+impl Button {
+    pub fn new(id: i32, name: PCWSTR) -> Self {
+        Button {
+            id,
+            name,
+            hwnd: HWND::default(),
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        }
+    }
+    pub fn with_x(mut self, x: i32) -> Self {
+        self.x = x;
+        self
+    }
+    pub fn with_y(mut self, y: i32) -> Self {
+        self.y = y;
+        self
+    }
+    pub fn with_width(mut self, width: i32) -> Self {
+        self.width = width;
+        self
+    }
+    pub fn with_height(mut self, height: i32) -> Self {
+        self.height = height;
+        self
+    }
+    pub fn with_text(mut self, text: PCWSTR) -> Self {
+        self.name = text;
+        self
+    }
+}
+
+impl Element for Button {
+    fn create_element(&mut self, parent: HWND, instance: HINSTANCE) -> Result<()> {
+        unsafe {
+            match CreateWindowExW(
+                WS_EX_LEFT,
+                w!("button"),
+                self.name,
+                WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_PUSHBUTTON as u32),
+                self.x,
+                self.y,
+                self.width,
+                self.height,
+                parent,
+                HMENU(self.id as *mut std::ffi::c_void),
+                instance,
+                None,
+            ) {
+                Ok(hwnd) => {
+                    self.hwnd = hwnd;
+                    Ok(())
+                }
+                Err(err) => Err(err),
+            }
+        }
+    }
+}
+
+pub struct MainWindow {
+    base: BaseWin,
+    inst: HINSTANCE,
+    child: Option<Component>,
+    created: bool,
+}
+
+impl Win for MainWindow {
+    default_win_impl!();
+
+    fn new(inst: HINSTANCE) -> Self {
+        MainWindow {
+            base: BaseWin::default(),
+            inst: inst,
+            child: None,
+            created: false,
+        }
+    }
+    fn create_window_with_args(
+        &mut self,
+        title: PCWSTR,
+        create_args: &WinCreateArgs,
+    ) -> Result<HWND> {
+        self.create_win(title, create_args, self.inst)
+    }
+
+    fn set_child(&mut self, mut child: Component) {
+        if self.created {
+            child.create_element(self.get_hwnd(), self.inst).unwrap();
+        }
+        self.child = Some(child);
+    }
+
+    fn create_window(&mut self, title: PCWSTR) -> Result<HWND> {
+        let create_args = WinCreateArgs {
+            instance: self.inst.into(),
+            ..WinCreateArgs::default_win_main()
+        };
+        self.create_win(title, &create_args, self.inst)
+    }
+
+    fn on_create(&mut self, _event: &Event) -> EventHandled {
+        self.created = true;
+        let child = self.child.take();
+        if let Some(mut child) = child {
+            child.create_element(self.get_hwnd(), self.inst);
+            self.child = Some(child);
+        };
+        EventHandled::Handled(LRESULT(0))
     }
 }
