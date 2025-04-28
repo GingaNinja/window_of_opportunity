@@ -12,9 +12,8 @@
 
 pub use self::win::Win;
 
+use app::WPApp;
 use dc::DeviceContext;
-use mutation_writer::MutationWriter;
-use win::MainWindow;
 use win_create_args::WinCreateArgs;
 use windows::{
     core::*,
@@ -24,26 +23,27 @@ use windows::{
     },
 };
 
-use dioxus_core::{Element, ElementId, Mutations, ScopeId, VirtualDom, WriteMutations};
+use dioxus_core::{Element, VirtualDom};
 
+pub mod app;
 pub mod dc;
 pub mod kbd;
+pub mod module;
 pub mod mouse;
-pub mod mutation_writer;
 pub mod win;
 pub mod win_create_args;
 
 pub fn launch(app: fn() -> Element) {
-    launch_vdom(&mut VirtualDom::new(app));
+    launch_vdom(VirtualDom::new(app));
 }
 
-pub fn launch_vdom(vdom: &mut VirtualDom) {
+pub fn launch_vdom(vdom: VirtualDom) {
     render(vdom);
 }
 
 // hwnd could be used as the id. You then modify/destroy windows (controls)
 //
-pub fn render(vdom: &mut VirtualDom) -> Result<()> {
+pub fn render(mut vdom: VirtualDom) -> Result<()> {
     let create_args = WinCreateArgs {
         instance: HINSTANCE::default(),
         window_height: 400,
@@ -51,10 +51,13 @@ pub fn render(vdom: &mut VirtualDom) -> Result<()> {
         //     & !(WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE),
         ..WinCreateArgs::default_win_main()
     };
-    let mut app = WPApp::<MainWindow>::new_with_config(create_args);
-    vdom.rebuild(&mut app);
 
+    let mut app = WPApp::new_with_config(create_args);
+    app.main_win.set_created_callback(move |win| {
+        vdom.rebuild(win);
+    });
     app.init(w!("testing"))?;
+
     app.run(|app| {});
     Ok(())
 }
@@ -292,219 +295,6 @@ impl BaseWin {
 //         EventHandled::Handled(LRESULT(0))
 //     }
 // }
-
-struct WPModule {
-    hinst: HINSTANCE,
-    // cmdLine: &str,
-}
-
-impl WPModule {
-    fn new() -> WPModule {
-        unsafe {
-            match GetModuleHandleW(None) {
-                Ok(hinst) => WPModule {
-                    hinst: hinst.into(),
-                },
-                Err(error) => {
-                    println!("error getting hinstance: {:?}", error);
-                    WPModule {
-                        hinst: HINSTANCE::default(),
-                    }
-                }
-            }
-        }
-    }
-
-    fn get_hinstance(&self) -> HINSTANCE {
-        self.hinst
-    }
-}
-
-pub struct WPApp<T: Win> {
-    module: WPModule,
-    pub main_win: T,
-    exit_code: WPARAM,
-    accel: Option<HACCEL>,
-    create_args: Option<WinCreateArgs>,
-}
-
-pub fn new_app_with_main_window() -> WPApp<MainWindow> {
-    WPApp::<MainWindow>::new()
-}
-
-impl<T: Win> WPApp<T> {
-    pub fn new() -> Self {
-        let module = WPModule::new();
-        let main_win = T::new(module.hinst);
-
-        // self.main_win = Some(main_win);
-        WPApp {
-            module,
-            main_win,
-            exit_code: WPARAM(0),
-            accel: None,
-            create_args: None,
-        }
-    }
-
-    pub fn new_with_config(create_args: WinCreateArgs) -> Self {
-        let mut app = Self::new();
-        app.create_args = Some(create_args);
-        app
-    }
-
-    pub fn init(&mut self, title: PCWSTR) -> Result<()> {
-        match &self.create_args {
-            None => {
-                self.main_win.create_window(title)?;
-            }
-            Some(create_args) => {
-                self.main_win.create_window_with_args(title, create_args)?;
-            }
-        }
-
-        match self.load_accelerators() {
-            Ok(accel) => self.accel = Some(accel),
-            Err(_err) => println!("couldn't load accelerator"),
-        }
-
-        Ok(())
-    }
-
-    pub fn load_accelerators(&self) -> Result<HACCEL> {
-        unsafe { LoadAcceleratorsW(self.get_hinstance(), w!("AppAccel")) }
-    }
-
-    pub fn get_hinstance(&self) -> HINSTANCE {
-        self.module.get_hinstance()
-    }
-
-    pub fn exit_code(&self) -> WPARAM {
-        self.exit_code
-    }
-
-    pub fn get_message(msg: &mut MSG) -> bool {
-        unsafe { GetMessageW(msg, None, 0, 0).into() }
-    }
-
-    pub fn peek_message(msg: &mut MSG) -> bool {
-        unsafe { PeekMessageW(msg, None, 0, 0, PM_REMOVE).into() }
-    }
-
-    pub fn translate_accelerator(&self, accel: HACCEL, msg: MSG) -> bool {
-        let msg = &msg as *const _;
-        unsafe { TranslateAcceleratorW(self.main_win.get_hwnd(), accel, msg) > 0 }
-    }
-
-    pub fn translate_message(msg: &MSG) -> bool {
-        unsafe { TranslateMessage(msg).as_bool() }
-    }
-
-    pub fn dispatch_message(msg: &MSG) {
-        unsafe {
-            DispatchMessageW(msg);
-        }
-    }
-
-    pub fn run<F>(&mut self, mut f: F) -> ()
-    where
-        F: FnMut(&mut Self) -> (),
-    {
-        self.main_win.show();
-        self.main_win.update();
-
-        let mut msg = MSG::default();
-        let mut peek = true;
-
-        while peek || Self::get_message(&mut msg) {
-            if peek {
-                // Use PeekMessage instead of GetMessage
-                if Self::peek_message(&mut msg) {
-                    peek = self.main_win.do_idle();
-                    continue;
-                }
-                if msg.message == WM_QUIT {
-                    break;
-                }
-            }
-            let accel_message = match self.accel {
-                None => false,
-                Some(accel) => self.translate_accelerator(accel, msg),
-            };
-            if !accel_message {
-                Self::translate_message(&msg);
-                Self::dispatch_message(&msg);
-            }
-            f(self);
-        }
-
-        self.exit_code = msg.wParam
-    }
-}
-
-impl<T: Win> WriteMutations for WPApp<T> {
-    fn append_children(&mut self, id: ElementId, m: usize) {}
-
-    fn assign_node_id(&mut self, path: &'static [u8], id: ElementId) {
-        todo!()
-    }
-
-    fn create_placeholder(&mut self, id: ElementId) {
-        todo!()
-    }
-
-    fn create_text_node(&mut self, value: &str, id: ElementId) {
-        todo!()
-    }
-
-    fn load_template(&mut self, template: dioxus_core::Template, index: usize, id: ElementId) {}
-
-    fn replace_node_with(&mut self, id: ElementId, m: usize) {
-        todo!()
-    }
-
-    fn replace_placeholder_with_nodes(&mut self, path: &'static [u8], m: usize) {
-        todo!()
-    }
-
-    fn insert_nodes_after(&mut self, id: ElementId, m: usize) {
-        todo!()
-    }
-
-    fn insert_nodes_before(&mut self, id: ElementId, m: usize) {
-        todo!()
-    }
-
-    fn set_attribute(
-        &mut self,
-        name: &'static str,
-        ns: Option<&'static str>,
-        value: &dioxus_core::AttributeValue,
-        id: ElementId,
-    ) {
-        todo!()
-    }
-
-    fn set_node_text(&mut self, value: &str, id: ElementId) {
-        todo!()
-    }
-
-    fn create_event_listener(&mut self, name: &'static str, id: ElementId) {
-        todo!()
-    }
-
-    fn remove_event_listener(&mut self, name: &'static str, id: ElementId) {
-        todo!()
-    }
-
-    fn remove_node(&mut self, id: ElementId) {
-        todo!()
-    }
-
-    fn push_root(&mut self, id: ElementId) {
-        todo!()
-    }
-}
 
 // pub fn set_scroll_info(hwnd: HWND, sb_option: SCROLLBAR_CONSTANTS, si: &SCROLLINFO, redraw: BOOL) {
 //     unsafe {

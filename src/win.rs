@@ -102,6 +102,12 @@ pub trait Win {
         Ok(rect)
     }
 
+    fn set_window_text(&mut self, text: PCWSTR) {
+        unsafe {
+            SetWindowTextW(self.get_hwnd(), text).unwrap();
+        }
+    }
+
     fn create_window(&mut self, title: PCWSTR) -> Result<HWND>;
     fn create_window_with_args(
         &mut self,
@@ -336,7 +342,7 @@ pub enum Component {
 }
 
 impl Component {
-    fn create_element(&mut self, parent: HWND, instance: HINSTANCE) -> Result<()> {
+    pub fn create_element(&mut self, parent: HWND, instance: HINSTANCE) -> Result<()> {
         match self {
             Component::Element(el) => el.create_element(parent, instance),
             Component::Container(con) => Ok(()),
