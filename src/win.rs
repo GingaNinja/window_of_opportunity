@@ -102,6 +102,14 @@ pub trait Win {
         Ok(rect)
     }
 
+    fn get_window_rect(&self) -> Result<RECT> {
+        let mut rect = RECT::default();
+        unsafe {
+            GetWindowRect(self.get_hwnd(), &mut rect)?;
+        }
+        Ok(rect)
+    }
+
     fn set_window_text(&mut self, text: PCWSTR) {
         unsafe {
             SetWindowTextW(self.get_hwnd(), text).unwrap();
@@ -188,6 +196,10 @@ pub trait Win {
         let processed_event = match event.message {
             WM_CREATE => {
                 self.get_base().on_create(event);
+                if let Ok(rect) = self.get_window_rect() {
+                    self.get_base().x = rect.right - rect.left;
+                    self.get_base().y = rect.bottom - rect.top;
+                }
                 self.on_create(event)
             }
             WM_PAINT => {
@@ -327,13 +339,25 @@ pub trait Win {
 }
 
 pub trait Element {
-    fn create_element(&mut self, parent: HWND, instance: HINSTANCE) -> Result<()>;
+    fn create_element(
+        &mut self,
+        parent: HWND,
+        instance: HINSTANCE,
+        parent_rect: &RECT,
+    ) -> Result<()>;
     // we should have a drop for removing elements
+    fn update_available_space(&mut self, x: i32, y: i32);
 }
 
 pub trait Container {
-    fn create_container(&mut self, parent: HWND, instance: HINSTANCE) -> Result<()>;
+    fn create_container(
+        &mut self,
+        parent: HWND,
+        instance: HINSTANCE,
+        parent_rect: &RECT,
+    ) -> Result<()>;
     fn add_child(&mut self, child: Component);
+    fn update_available_space(&mut self, x: i32, y: i32);
 }
 
 pub enum Component {
@@ -342,10 +366,22 @@ pub enum Component {
 }
 
 impl Component {
-    pub fn create_element(&mut self, parent: HWND, instance: HINSTANCE) -> Result<()> {
+    pub fn create_element(
+        &mut self,
+        parent: HWND,
+        instance: HINSTANCE,
+        parent_rect: &RECT,
+    ) -> Result<()> {
         match self {
-            Component::Element(el) => el.create_element(parent, instance),
-            Component::Container(con) => con.create_container(parent, instance),
+            Component::Element(el) => el.create_element(parent, instance, parent_rect),
+            Component::Container(con) => con.create_container(parent, instance, parent_rect),
+        }
+    }
+
+    pub fn update_available_space(&mut self, x: i32, y: i32) {
+        match self {
+            Component::Element(el) => el.update_available_space(x, y),
+            Component::Container(con) => con.update_available_space(x, y),
         }
     }
 }
@@ -395,7 +431,12 @@ impl Button {
 }
 
 impl Element for Button {
-    fn create_element(&mut self, parent: HWND, instance: HINSTANCE) -> Result<()> {
+    fn create_element(
+        &mut self,
+        parent: HWND,
+        instance: HINSTANCE,
+        _parent_rect: &RECT,
+    ) -> Result<()> {
         unsafe {
             match CreateWindowExW(
                 WS_EX_LEFT,
@@ -418,6 +459,11 @@ impl Element for Button {
                 Err(err) => Err(err),
             }
         }
+    }
+
+    fn update_available_space(&mut self, x: i32, y: i32) {
+        self.width = x;
+        self.height = y;
     }
 }
 
@@ -449,7 +495,15 @@ impl Win for MainWindow {
 
     fn set_child(&mut self, mut child: Component) {
         if self.created {
-            child.create_element(self.get_hwnd(), self.inst).unwrap();
+            let rect = RECT {
+                left: 0,
+                top: 0,
+                right: self.get_base().x,
+                bottom: self.get_base().y,
+            };
+            child
+                .create_element(self.get_hwnd(), self.inst, &rect)
+                .unwrap();
         }
         self.child = Some(child);
     }
@@ -466,7 +520,16 @@ impl Win for MainWindow {
         self.created = true;
         let child = self.child.take();
         if let Some(mut child) = child {
-            child.create_element(self.get_hwnd(), self.inst);
+            let rect = RECT {
+                left: 0,
+                top: 0,
+                right: self.get_base().x,
+                bottom: self.get_base().y,
+            };
+
+            child
+                .create_element(self.get_hwnd(), self.inst, &rect)
+                .unwrap();
             self.child = Some(child);
         };
         EventHandled::Handled(LRESULT(0))

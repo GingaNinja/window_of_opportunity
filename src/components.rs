@@ -3,7 +3,7 @@ use crate::kbd::KbdEvent;
 use crate::mouse::MouseEvent;
 use crate::win::{Component, Container};
 use crate::{
-    default_win_impl, hword, lword, BaseWin, CommandEvent, Event, EventHandled, SourceType, Win,
+    default_win_impl, hword, lword, BaseWin, CommandEvent, Event, EventHandled, SourceType,
     WinCreateArgs,
 };
 use std::mem;
@@ -12,76 +12,20 @@ use windows::{
     Win32::{Foundation::*, Graphics::Gdi::*, UI::WindowsAndMessaging::*},
 };
 
-pub struct Div {
-    base: BaseWin,
-    inst: HINSTANCE,
-    child: Option<Component>,
-    created: bool,
-    created_callback: Option<Box<dyn FnMut(&mut Div) -> ()>>,
-    hwnd: HWND,
-}
-
-impl Container for Div {
-    fn create_container(&mut self, parent: HWND, instance: HINSTANCE) -> Result<()> {
+pub trait CustomComponent {
+    fn to_self_ptr(c_void: *mut ::core::ffi::c_void) -> *mut Self;
+    fn get_canary(&self) -> i32 {
+        10
+    }
+    fn get_hwnd(&self) -> HWND;
+    fn set_hwnd(&mut self, hwnd: HWND);
+    fn get_base(&mut self) -> &mut BaseWin;
+    fn set_window_pos(&mut self, x: i32, y: i32, width: i32, height: i32) {
         unsafe {
-            match CreateWindowExW(
-                WS_EX_LEFT,
-                w!("div"),
-                w!("div"),
-                WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_PUSHBUTTON as u32),
-                10,
-                10,
-                100,
-                20,
-                parent,
-                HMENU(999 as *mut std::ffi::c_void),
-                instance,
-                Some(self as *const _ as _),
-            ) {
-                Ok(hwnd) => {
-                    self.hwnd = hwnd;
-                    Ok(())
-                }
-                Err(err) => Err(err),
-            }
+            SetWindowPos(self.get_hwnd(), HWND_TOP, x, y, width, height, SWP_NOZORDER).unwrap();
         }
     }
-
-    fn add_child(&mut self, child: Component) {
-        self.child = Some(child);
-    }
-}
-
-impl Div {
-    default_win_impl!();
-    pub fn new(inst: HINSTANCE) -> Self {
-        let mut div = Div {
-            base: BaseWin::default(),
-            inst,
-            child: None,
-            created: false,
-            created_callback: None,
-            hwnd: HWND::default(),
-        };
-
-        div.create_component();
-        div
-    }
-    fn set_child(&mut self, mut child: Component) {
-        if self.created {
-            child.create_element(self.get_hwnd(), self.inst).unwrap();
-        }
-        self.child = Some(child);
-    }
-
-    fn create_component(&mut self) -> Result<()> {
-        let create_args = WinCreateArgs {
-            instance: self.inst.into(),
-            ..WinCreateArgs::default_win_main()
-        };
-        self.create_comp(&create_args)
-    }
-
+    fn raw_ptr_isize(ptr: *mut Self) -> isize;
     fn create_comp(&mut self, create_args: &WinCreateArgs) -> std::result::Result<(), Error> {
         let brush: HGDIOBJ;
         unsafe {
@@ -267,16 +211,10 @@ impl Div {
                     SetWindowLongPtrW(hwnd, GWLP_USERDATA, Self::raw_ptr_isize(ptr_self));
                     let ref_self = &mut *ptr_self;
 
-                    // println!("my_num in wndproc: {:?}", ref_self.my_num);
                     ref_self.set_hwnd(hwnd.clone());
 
-                    // let window_obj = Rc::from_raw(createstruct.lpCreateParams as *const &WPWin);
-                    // println!("window (in proc) hwnd: {:?}", window_obj.get_hwnd());
-                    // println!("proc hwnd: {:?}", window);
-                    // println!("my_num: {:?}", window_obj.my_num);
                     ptr_self
                 }
-                //LRESULT(1)
             }
             _ => unsafe {
                 Self::to_self_ptr(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ::core::ffi::c_void)
@@ -301,5 +239,99 @@ impl Div {
             lparam: lparam,
         };
         ref_self.dispatch_event(&event)
+    }
+}
+
+pub struct Div {
+    base: BaseWin,
+    inst: HINSTANCE,
+    child: Option<Component>,
+    created: bool,
+    created_callback: Option<Box<dyn FnMut(&mut Div) -> ()>>,
+    hwnd: HWND,
+}
+
+impl CustomComponent for Div {
+    default_win_impl!();
+}
+
+impl Container for Div {
+    fn create_container(
+        &mut self,
+        parent: HWND,
+        instance: HINSTANCE,
+        parent_rect: &RECT,
+    ) -> Result<()> {
+        unsafe {
+            match CreateWindowExW(
+                WS_EX_LEFT,
+                w!("div"),
+                w!("div"),
+                WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_PUSHBUTTON as u32),
+                parent_rect.left,
+                parent_rect.top,
+                parent_rect.right - parent_rect.left,
+                parent_rect.bottom - parent_rect.top,
+                parent,
+                HMENU(999 as *mut std::ffi::c_void),
+                instance,
+                Some(self as *const _ as _),
+            ) {
+                Ok(hwnd) => {
+                    self.hwnd = hwnd;
+                    Ok(())
+                }
+                Err(err) => Err(err),
+            }
+        }
+    }
+
+    fn add_child(&mut self, child: Component) {
+        self.child = Some(child);
+    }
+
+    fn update_available_space(&mut self, x: i32, y: i32) {
+        self.set_window_pos(0, 0, x, y);
+    }
+}
+
+impl Div {
+    pub fn new(inst: HINSTANCE) -> Self {
+        let mut div = Div {
+            base: BaseWin::default(),
+            inst,
+            child: None,
+            created: false,
+            created_callback: None,
+            hwnd: HWND::default(),
+        };
+
+        div.create_component();
+        div
+    }
+    fn set_child(&mut self, mut child: Component) {
+        if self.created {
+            child
+                .create_element(
+                    self.get_hwnd(),
+                    self.inst,
+                    &RECT {
+                        left: 0,
+                        right: 0,
+                        top: 0,
+                        bottom: 0,
+                    },
+                )
+                .unwrap();
+        }
+        self.child = Some(child);
+    }
+
+    fn create_component(&mut self) -> Result<()> {
+        let create_args = WinCreateArgs {
+            instance: self.inst.into(),
+            ..WinCreateArgs::default_win_main()
+        };
+        self.create_comp(&create_args)
     }
 }

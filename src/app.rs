@@ -156,6 +156,13 @@ impl ReactiveWindow {
 impl Win for ReactiveWindow {
     default_win_impl!();
 
+    fn on_resize(&mut self, _x: i32, _y: i32) -> EventHandled {
+        if let Some(child) = &mut self.child {
+            child.update_available_space(_x, _y);
+        }
+        EventHandled::Handled(LRESULT(0))
+    }
+
     fn new(inst: HINSTANCE) -> Self {
         Self {
             base: BaseWin::default(),
@@ -175,7 +182,15 @@ impl Win for ReactiveWindow {
 
     fn set_child(&mut self, mut child: Component) {
         if self.created {
-            child.create_element(self.get_hwnd(), self.inst).unwrap();
+            let rect = RECT {
+                left: 0,
+                top: 0,
+                right: self.get_base().x,
+                bottom: self.get_base().y,
+            };
+            child
+                .create_element(self.get_hwnd(), self.inst, &rect)
+                .unwrap();
         }
         self.child = Some(child);
     }
@@ -192,7 +207,16 @@ impl Win for ReactiveWindow {
         self.created = true;
         let child = self.child.take();
         if let Some(mut child) = child {
-            child.create_element(self.get_hwnd(), self.inst);
+            let rect = RECT {
+                left: 0,
+                top: 0,
+                right: self.get_base().x,
+                bottom: self.get_base().y,
+            };
+
+            child
+                .create_element(self.get_hwnd(), self.inst, &rect)
+                .unwrap();
             self.child = Some(child);
         };
         println!("created window...");
@@ -212,9 +236,14 @@ impl Win for ReactiveWindow {
 impl WriteMutations for ReactiveWindow {
     fn append_children(&mut self, id: ElementId, m: usize) {
         println!("append_children... id: {id:?}, m: {m}");
-        let button = Button::new(1, w!("testing123"))
-            .with_height(30)
-            .with_width(100);
+        //let button = Button::new(1, w!("testing123"))
+        //   .with_height(30)
+        //    .with_width(100);
+        let (x, y) = {
+            let base = self.get_base();
+            (base.x, base.y)
+        };
+        println!("width: {:?}, height: {:?}", x, y);
         let div = Div::new(self.inst);
         self.set_child(Component::Container(Box::new(div)));
         //self.set_child(Component::Element(Box::new(button)));
