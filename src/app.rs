@@ -1,3 +1,4 @@
+use crate::components::Div;
 use crate::win::{Button, Component};
 use crate::win_create_args::WinCreateArgs;
 use crate::{default_win_impl, BaseWin, Event, EventHandled, Win};
@@ -214,69 +215,71 @@ impl WriteMutations for ReactiveWindow {
         let button = Button::new(1, w!("testing123"))
             .with_height(30)
             .with_width(100);
-        self.set_child(Component::Element(Box::new(button)));
+        let div = Div::new(self.inst);
+        self.set_child(Component::Container(Box::new(div)));
+        //self.set_child(Component::Element(Box::new(button)));
         self.set_window_text(w!("we just set the text ad-hoc"));
     }
 
-    fn assign_node_id(&mut self, path: &'static [u8], id: ElementId) {
+    fn assign_node_id(&mut self, _path: &'static [u8], _id: ElementId) {
         todo!()
     }
 
-    fn create_placeholder(&mut self, id: ElementId) {
+    fn create_placeholder(&mut self, _id: ElementId) {
         todo!()
     }
 
-    fn create_text_node(&mut self, value: &str, id: ElementId) {
+    fn create_text_node(&mut self, _value: &str, _id: ElementId) {
         todo!()
     }
 
-    fn load_template(&mut self, template: dioxus_core::Template, index: usize, id: ElementId) {
+    fn load_template(&mut self, template: dioxus_core::Template, _index: usize, _id: ElementId) {
         println!("load template: {template:?}")
     }
 
-    fn replace_node_with(&mut self, id: ElementId, m: usize) {
+    fn replace_node_with(&mut self, _id: ElementId, _m: usize) {
         todo!()
     }
 
-    fn replace_placeholder_with_nodes(&mut self, path: &'static [u8], m: usize) {
+    fn replace_placeholder_with_nodes(&mut self, _path: &'static [u8], _m: usize) {
         todo!()
     }
 
-    fn insert_nodes_after(&mut self, id: ElementId, m: usize) {
+    fn insert_nodes_after(&mut self, _id: ElementId, _m: usize) {
         todo!()
     }
 
-    fn insert_nodes_before(&mut self, id: ElementId, m: usize) {
+    fn insert_nodes_before(&mut self, _id: ElementId, _m: usize) {
         todo!()
     }
 
     fn set_attribute(
         &mut self,
-        name: &'static str,
-        ns: Option<&'static str>,
-        value: &dioxus_core::AttributeValue,
-        id: ElementId,
+        _name: &'static str,
+        _ns: Option<&'static str>,
+        _value: &dioxus_core::AttributeValue,
+        _id: ElementId,
     ) {
         todo!()
     }
 
-    fn set_node_text(&mut self, value: &str, id: ElementId) {
+    fn set_node_text(&mut self, _value: &str, _id: ElementId) {
         todo!()
     }
 
-    fn create_event_listener(&mut self, name: &'static str, id: ElementId) {
+    fn create_event_listener(&mut self, _name: &'static str, _id: ElementId) {
         todo!()
     }
 
-    fn remove_event_listener(&mut self, name: &'static str, id: ElementId) {
+    fn remove_event_listener(&mut self, _name: &'static str, _id: ElementId) {
         todo!()
     }
 
-    fn remove_node(&mut self, id: ElementId) {
+    fn remove_node(&mut self, _id: ElementId) {
         todo!()
     }
 
-    fn push_root(&mut self, id: ElementId) {
+    fn push_root(&mut self, _id: ElementId) {
         todo!()
     }
 }

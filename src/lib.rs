@@ -26,6 +26,7 @@ use windows::{
 use dioxus_core::{Element, VirtualDom};
 
 pub mod app;
+pub mod components;
 pub mod dc;
 pub mod kbd;
 pub mod module;
@@ -58,7 +59,7 @@ pub fn render(mut vdom: VirtualDom) -> Result<()> {
     });
     app.init(w!("testing"))?;
 
-    app.run(|app| {});
+    app.run(|_app| {});
     Ok(())
 }
 

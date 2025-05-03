@@ -140,21 +140,20 @@ pub trait Win {
             Err(_) => HICON::default(),
             Ok(icon) => icon,
         };
+        let wc = WNDCLASSEXW {
+            hCursor: create_args.cursor,
+            hIcon: icon,
+            hInstance: create_args.instance,
+            lpszClassName: create_args.class_name,
+            hbrBackground: brush,
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(Self::wndproc),
+            cbSize: mem::size_of::<WNDCLASSEXW>() as u32,
+            lpszMenuName: create_args.menu_name,
+            ..Default::default()
+        };
 
         unsafe {
-            let wc = WNDCLASSEXW {
-                hCursor: create_args.cursor,
-                hIcon: icon,
-                hInstance: create_args.instance,
-                lpszClassName: create_args.class_name,
-                hbrBackground: brush,
-                style: CS_HREDRAW | CS_VREDRAW,
-                lpfnWndProc: Some(Self::wndproc),
-                cbSize: mem::size_of::<WNDCLASSEXW>() as u32,
-                lpszMenuName: create_args.menu_name,
-                ..Default::default()
-            };
-
             // if class doesn't already exist? check the result for this...
             let atom = RegisterClassExW(&wc);
             debug_assert!(atom != 0);
@@ -333,6 +332,7 @@ pub trait Element {
 }
 
 pub trait Container {
+    fn create_container(&mut self, parent: HWND, instance: HINSTANCE) -> Result<()>;
     fn add_child(&mut self, child: Component);
 }
 
@@ -345,7 +345,7 @@ impl Component {
     pub fn create_element(&mut self, parent: HWND, instance: HINSTANCE) -> Result<()> {
         match self {
             Component::Element(el) => el.create_element(parent, instance),
-            Component::Container(con) => Ok(()),
+            Component::Container(con) => con.create_container(parent, instance),
         }
     }
 }
