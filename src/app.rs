@@ -1,10 +1,12 @@
-use crate::components::Div;
+use std::fmt::Debug;
+
+use crate::components::{Div, Text};
 use crate::win::{Button, Component};
 use crate::win_create_args::WinCreateArgs;
 use crate::{default_win_impl, BaseWin, Event, EventHandled, Win};
 
 use crate::module::WPModule;
-use dioxus_core::{ElementId, VirtualDom, WriteMutations};
+use dioxus_core::{ElementId, TemplateNode, WriteMutations};
 use windows::Win32::UI::WindowsAndMessaging::HACCEL;
 use windows::{
     core::*,
@@ -133,32 +135,84 @@ impl WPApp {
     }
 }
 
+/// The state of the Dioxus integration with the win32 windows
+#[derive(Debug)]
+pub struct DioxusState {
+    /// Store of templates keyed by unique name
+    //templates: FxHashMap<Template, Vec<NodeId>>,
+    /// Stack machine state for applying dioxus mutations
+    stack: Vec<Box<dyn Component>>,
+    /// Mapping from vdom ElementId -> treepath
+    treepath_mapping: Vec<Vec<i32>>,
+    counter: usize,
+}
+
+impl DioxusState {
+    fn new(mount_point: Box<dyn Component>) -> Self {
+        Self {
+            stack: vec![mount_point],
+            treepath_mapping: vec![vec![0]],
+            counter: 0,
+        }
+    }
+
+    /// Convert an ElementId to a treepath
+    pub fn element_to_treepath(&self, element_id: ElementId) -> &[i32] {
+        // self.try_element_to_treepath(element_id).unwrap()
+        self.treepath_mapping.get(element_id.0).unwrap()
+    }
+
+    // Attempt to convert an ElementId to a treepath. This will return None if the ElementId is not in the RealDom.
+    // pub fn try_element_to_treepath(&self, element_id: ElementId) -> Option<Vec<i32>> {
+    //     self.treepath_mapping.get(element_id.0).unwrap()
+    //     //.copied().flatten()
+    // }
+}
+
 pub struct ReactiveWindow
 // where
 //     F: FnMut(Self) -> (),
 {
     base: BaseWin,
     inst: HINSTANCE,
-    child: Option<Component>,
+    child: Option<Box<dyn Component>>,
     created: bool,
-    created_callback: Option<Box<dyn FnMut(&mut ReactiveWindow) -> ()>>,
+    event_callback: Option<Box<dyn FnMut(&mut ReactiveWindow, ReactiveEvent) -> ()>>,
+    state: DioxusState,
 }
 
-impl ReactiveWindow {
-    pub fn set_created_callback(
+pub enum ReactiveEvent {
+    Created,
+    Command,
+}
+
+#[derive(Debug)]
+struct WindowPlaceholder {}
+impl Component for WindowPlaceholder {
+    fn create_element(
         &mut self,
-        callback: impl FnMut(&mut ReactiveWindow) -> () + 'static,
-    ) -> () {
-        self.created_callback = Some(Box::new(callback));
+        _parent: HWND,
+        _instance: HINSTANCE,
+        _parent_rect: &RECT,
+    ) -> Result<HWND> {
+        panic!("this is just a placeholder, shouldn't be trying to display it...");
+    }
+
+    fn set_window_position(&mut self, _x: i32, _y: i32, _width: i32, _height: i32) {
+        todo!()
+    }
+
+    fn get_dimensions(&self) -> (i32, i32) {
+        todo!()
     }
 }
 
 impl Win for ReactiveWindow {
     default_win_impl!();
 
-    fn on_resize(&mut self, _x: i32, _y: i32) -> EventHandled {
+    fn on_resize(&mut self, x: i32, y: i32) -> EventHandled {
         if let Some(child) = &mut self.child {
-            child.update_available_space(_x, _y);
+            child.set_window_position(0, 0, x, y);
         }
         EventHandled::Handled(LRESULT(0))
     }
@@ -166,10 +220,11 @@ impl Win for ReactiveWindow {
     fn new(inst: HINSTANCE) -> Self {
         Self {
             base: BaseWin::default(),
-            inst: inst,
+            inst,
             child: None,
             created: false,
-            created_callback: None,
+            event_callback: None,
+            state: DioxusState::new(Box::new(WindowPlaceholder {})),
         }
     }
     fn create_window_with_args(
@@ -180,7 +235,7 @@ impl Win for ReactiveWindow {
         self.create_win(title, create_args, self.inst)
     }
 
-    fn set_child(&mut self, mut child: Component) {
+    fn set_child(&mut self, mut child: Box<dyn Component>) {
         if self.created {
             let rect = RECT {
                 left: 0,
@@ -203,6 +258,14 @@ impl Win for ReactiveWindow {
         self.create_win(title, &create_args, self.inst)
     }
 
+    fn update_child_dpi(&mut self, dpi: u32) {
+        let child = self.child.take();
+        if let Some(mut child) = child {
+            child.update_dpi(dpi);
+            self.child = Some(child);
+        }
+    }
+
     fn on_create(&mut self, _event: &Event) -> EventHandled {
         self.created = true;
         let child = self.child.take();
@@ -219,59 +282,133 @@ impl Win for ReactiveWindow {
                 .unwrap();
             self.child = Some(child);
         };
-        println!("created window...");
-        let callback = self.created_callback.take();
+        println!("created window (some new text)...");
+        let callback = self.event_callback.take();
         if let Some(mut callback) = callback {
             println!("calling callback...");
-            callback(self);
+            callback(self, ReactiveEvent::Created);
 
-            self.created_callback = Some(callback);
+            self.event_callback = Some(callback);
         } else {
-            self.created_callback = None;
+            self.event_callback = None;
+        }
+        EventHandled::Handled(LRESULT(0))
+    }
+
+    fn on_command(&mut self, _event: &crate::CommandEvent) -> EventHandled {
+        let callback = self.event_callback.take();
+        println!("in the 'on_command' handler");
+        if let Some(mut callback) = callback {
+            callback(self, ReactiveEvent::Command);
+            self.event_callback = Some(callback);
         }
         EventHandled::Handled(LRESULT(0))
     }
 }
 
+impl ReactiveWindow {
+    pub fn set_event_callback(
+        &mut self,
+        callback: impl FnMut(&mut ReactiveWindow, ReactiveEvent) -> () + 'static,
+    ) -> () {
+        self.event_callback = Some(Box::new(callback));
+    }
+    fn create_template_node(&mut self, node: &TemplateNode) -> Box<dyn Component> {
+        match node {
+            dioxus_core::TemplateNode::Text { text } => {
+                let text = Text::new(self.inst, text);
+                Box::new(text)
+            }
+            dioxus_core::TemplateNode::Element {
+                tag,
+                namespace: _,
+                attrs,
+                children,
+            } if *tag == "div" => {
+                let mut div = Div::new(self.inst);
+                if attrs.len() > 0 {
+                    div.set_bk_colour(0x00E2E2FE);
+                }
+                let children: Vec<_> = children
+                    .iter()
+                    .map(|child| self.create_template_node(child))
+                    .collect();
+                for child in children {
+                    div.add_child(child);
+                }
+                Box::new(div)
+            }
+            dioxus_core::TemplateNode::Element {
+                tag,
+                namespace: _,
+                attrs: _,
+                children,
+            } if *tag == "button" => {
+                let text = match children.first().unwrap() {
+                    dioxus_core::TemplateNode::Text { text } => text,
+                    _ => "",
+                };
+                self.state.counter += 1;
+                let button = Button::new(self.state.counter, text.to_owned());
+                Box::new(button)
+            }
+            dioxus_core::TemplateNode::Dynamic { .. } => Box::new(WindowPlaceholder {}),
+            unknown => {
+                println!("unrecognised node type: {unknown:?}");
+                Box::new(WindowPlaceholder {})
+            }
+        }
+    }
+}
 impl WriteMutations for ReactiveWindow {
     fn append_children(&mut self, id: ElementId, m: usize) {
         println!("append_children... id: {id:?}, m: {m}");
-        //let button = Button::new(1, w!("testing123"))
-        //   .with_height(30)
-        //    .with_width(100);
-        let (x, y) = {
-            let base = self.get_base();
-            (base.x, base.y)
-        };
-        println!("width: {:?}, height: {:?}", x, y);
-        let div = Div::new(self.inst);
-        self.set_child(Component::Container(Box::new(div)));
-        //self.set_child(Component::Element(Box::new(button)));
+
+        let children = self.state.stack.split_off(self.state.stack.len() - m);
+        let parent = self.state.element_to_treepath(id);
+        let _self_is_parent = if parent.len() == 1 { true } else { false };
+        for child in children {
+            self.set_child(child);
+        }
         self.set_window_text(w!("we just set the text ad-hoc"));
     }
 
-    fn assign_node_id(&mut self, _path: &'static [u8], _id: ElementId) {
-        todo!()
+    fn assign_node_id(&mut self, path: &'static [u8], id: ElementId) {
+        println!("assign_node_id: {path:?}, id: {id:?}");
     }
 
     fn create_placeholder(&mut self, _id: ElementId) {
         todo!()
     }
 
-    fn create_text_node(&mut self, _value: &str, _id: ElementId) {
-        todo!()
+    fn create_text_node<'a>(&mut self, value: &'a str, id: ElementId) {
+        println!("create_text_node: {value}, {id:?}");
+        let text = Text::new(self.inst, value);
+        self.state.stack.push(Box::new(text));
     }
 
-    fn load_template(&mut self, template: dioxus_core::Template, _index: usize, _id: ElementId) {
-        println!("load template: {template:?}")
+    fn load_template(&mut self, template: dioxus_core::Template, index: usize, id: ElementId) {
+        println!("load template: {template:?} - index: {index}, id: {id:?}");
+
+        let new_node = self.create_template_node(template.roots.first().unwrap());
+        self.state.stack.push(new_node);
     }
 
     fn replace_node_with(&mut self, _id: ElementId, _m: usize) {
         todo!()
     }
 
-    fn replace_placeholder_with_nodes(&mut self, _path: &'static [u8], _m: usize) {
-        todo!()
+    fn replace_placeholder_with_nodes(&mut self, path: &'static [u8], m: usize) {
+        println!("replace_placeholder_with_nodes(path: {path:?}, m: {m:?})");
+        let new_nodes = self.state.stack.split_off(self.state.stack.len() - m);
+
+        let stack_len = self.state.stack.len();
+        let mut current_node = self.state.stack.get_mut(stack_len - 1).unwrap();
+        let (last, path) = path.split_last().unwrap();
+        for i in path {
+            current_node = current_node.get_child(*i as usize);
+        }
+        current_node.swap_node_with_nodes(*last as usize, new_nodes);
     }
 
     fn insert_nodes_after(&mut self, _id: ElementId, _m: usize) {
@@ -296,8 +433,8 @@ impl WriteMutations for ReactiveWindow {
         todo!()
     }
 
-    fn create_event_listener(&mut self, _name: &'static str, _id: ElementId) {
-        todo!()
+    fn create_event_listener(&mut self, name: &'static str, id: ElementId) {
+        println!("create_event_listener(name: {name:?}, id: {id:?})");
     }
 
     fn remove_event_listener(&mut self, _name: &'static str, _id: ElementId) {

@@ -10,20 +10,25 @@
 //! doing so, but currently it's just a blank window
 //! that can be drawn on with an onPaint event handler.
 
+use std::{any::Any, rc::Rc};
+
 pub use self::win::Win;
 
 use app::WPApp;
 use dc::DeviceContext;
+use dioxus::{
+    events::{
+        InteractionElementOffset, InteractionLocation, ModifiersInteraction, PointerInteraction,
+    },
+    html::{events::MouseData, HasMouseData, HtmlEventConverter, MountedData, PlatformEventData},
+};
 use win_create_args::WinCreateArgs;
 use windows::{
     core::*,
-    Win32::{
-        Foundation::*, Graphics::Gdi::TEXTMETRICW, System::LibraryLoader::GetModuleHandleW,
-        UI::WindowsAndMessaging::*,
-    },
+    Win32::{Foundation::*, Graphics::Gdi::TEXTMETRICW, UI::WindowsAndMessaging::*},
 };
 
-use dioxus_core::{Element, VirtualDom};
+use dioxus_core::{Element, ElementId, Event as DEvent, VirtualDom};
 
 pub mod app;
 pub mod components;
@@ -39,7 +44,136 @@ pub fn launch(app: fn() -> Element) {
 }
 
 pub fn launch_vdom(vdom: VirtualDom) {
-    render(vdom);
+    let _ = render(vdom);
+}
+
+#[derive(Clone)]
+struct MyMouseData {}
+impl HasMouseData for MyMouseData {
+    fn as_any(&self) -> &dyn std::any::Any {
+        todo!()
+    }
+}
+impl PointerInteraction for MyMouseData {
+    fn trigger_button(&self) -> Option<dioxus::html::input_data::MouseButton> {
+        todo!()
+    }
+
+    fn held_buttons(&self) -> dioxus::html::input_data::MouseButtonSet {
+        dioxus::html::input_data::MouseButtonSet::new()
+    }
+}
+impl ModifiersInteraction for MyMouseData {
+    fn modifiers(&self) -> dioxus::prelude::Modifiers {
+        todo!()
+    }
+}
+impl InteractionElementOffset for MyMouseData {
+    fn element_coordinates(&self) -> dioxus::html::geometry::ElementPoint {
+        todo!()
+    }
+}
+impl InteractionLocation for MyMouseData {
+    fn client_coordinates(&self) -> dioxus::html::geometry::ClientPoint {
+        todo!()
+    }
+
+    fn screen_coordinates(&self) -> dioxus::html::geometry::ScreenPoint {
+        todo!()
+    }
+
+    fn page_coordinates(&self) -> dioxus::html::geometry::PagePoint {
+        todo!()
+    }
+}
+
+struct NativeEventConverter;
+impl HtmlEventConverter for NativeEventConverter {
+    fn convert_animation_data(&self, _event: &PlatformEventData) -> dioxus::prelude::AnimationData {
+        todo!()
+    }
+
+    fn convert_clipboard_data(&self, _event: &PlatformEventData) -> dioxus::prelude::ClipboardData {
+        todo!()
+    }
+
+    fn convert_composition_data(
+        &self,
+        _event: &PlatformEventData,
+    ) -> dioxus::prelude::CompositionData {
+        todo!()
+    }
+
+    fn convert_drag_data(&self, _event: &PlatformEventData) -> dioxus::prelude::DragData {
+        todo!()
+    }
+
+    fn convert_focus_data(&self, _event: &PlatformEventData) -> dioxus::prelude::FocusData {
+        todo!()
+    }
+
+    fn convert_form_data(&self, _event: &PlatformEventData) -> dioxus::prelude::FormData {
+        todo!()
+    }
+
+    fn convert_image_data(&self, _event: &PlatformEventData) -> dioxus::prelude::ImageData {
+        todo!()
+    }
+
+    fn convert_keyboard_data(&self, _event: &PlatformEventData) -> dioxus::prelude::KeyboardData {
+        todo!()
+    }
+
+    fn convert_media_data(&self, _event: &PlatformEventData) -> dioxus::prelude::MediaData {
+        todo!()
+    }
+
+    fn convert_mounted_data(&self, _event: &PlatformEventData) -> MountedData {
+        todo!()
+    }
+
+    fn convert_mouse_data(&self, event: &PlatformEventData) -> MouseData {
+        event.downcast::<MyMouseData>().cloned().unwrap().into()
+    }
+
+    fn convert_pointer_data(&self, _event: &PlatformEventData) -> dioxus::prelude::PointerData {
+        todo!()
+    }
+
+    fn convert_resize_data(&self, _event: &PlatformEventData) -> dioxus::prelude::ResizeData {
+        todo!()
+    }
+
+    fn convert_scroll_data(&self, _event: &PlatformEventData) -> dioxus::prelude::ScrollData {
+        todo!()
+    }
+
+    fn convert_selection_data(&self, _event: &PlatformEventData) -> dioxus::prelude::SelectionData {
+        todo!()
+    }
+
+    fn convert_toggle_data(&self, _event: &PlatformEventData) -> dioxus::prelude::ToggleData {
+        todo!()
+    }
+
+    fn convert_touch_data(&self, _event: &PlatformEventData) -> dioxus::prelude::TouchData {
+        todo!()
+    }
+
+    fn convert_transition_data(
+        &self,
+        _event: &PlatformEventData,
+    ) -> dioxus::prelude::TransitionData {
+        todo!()
+    }
+
+    fn convert_visible_data(&self, _event: &PlatformEventData) -> dioxus::prelude::VisibleData {
+        todo!()
+    }
+
+    fn convert_wheel_data(&self, _event: &PlatformEventData) -> dioxus::prelude::WheelData {
+        todo!()
+    }
 }
 
 // hwnd could be used as the id. You then modify/destroy windows (controls)
@@ -54,8 +188,24 @@ pub fn render(mut vdom: VirtualDom) -> Result<()> {
     };
 
     let mut app = WPApp::new_with_config(create_args);
-    app.main_win.set_created_callback(move |win| {
-        vdom.rebuild(win);
+    dioxus::html::set_event_converter(Box::new(NativeEventConverter));
+    // app.main_win.set_created_callback(move |win| {
+    //     vdom.rebuild(win);
+    // });
+    app.main_win.set_event_callback(move |win, event| {
+        match event {
+            app::ReactiveEvent::Created => vdom.rebuild(win),
+            app::ReactiveEvent::Command => {
+                println!("received command event");
+                let data = MyMouseData {};
+                let data = PlatformEventData::new(Box::new(data));
+                let data = Rc::new(data) as Rc<dyn Any>;
+                // let pdata = data.clone().downcast::<PlatformEventData>().unwrap();
+                let event = DEvent::new(data, true);
+                vdom.runtime()
+                    .handle_event("click", event.clone(), ElementId(2));
+            }
+        }
     });
     app.init(w!("testing"))?;
 
@@ -93,6 +243,7 @@ pub enum SourceType {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct CommandEvent {
     command: i32,
     source_type: SourceType,
@@ -152,12 +303,15 @@ macro_rules! default_win_impl {
     };
 }
 
+#[derive(Debug)]
 pub struct BaseWin {
     pub hwnd: HWND,
     pub canary: i32,
     pub tm: TEXTMETRICW,
     pub x: i32,
     pub y: i32,
+    pub left: i32,
+    pub top: i32,
     // cx_char: i32,
     // cx_caps: i32,
     // cy_char: i32,
@@ -172,6 +326,8 @@ impl Default for BaseWin {
             tm: TEXTMETRICW::default(),
             x: 0,
             y: 0,
+            left: 0,
+            top: 0,
         }
     }
 }
@@ -328,7 +484,6 @@ pub fn load_cursor(inst: Option<HINSTANCE>, name: PCWSTR) -> Result<HCURSOR> {
         Some(inst) => unsafe { LoadCursorW(inst, name) },
     }
 }
-
 fn get_utf16_vec(text: &str) -> Vec<u16> {
     let mut text: Vec<u16> = text.encode_utf16().collect();
     text.push(0);
@@ -385,6 +540,4 @@ pub fn hword(val: isize) -> i32 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-}
+mod tests {}

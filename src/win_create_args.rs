@@ -1,6 +1,10 @@
 use windows::{
     core::*,
-    Win32::{Foundation::*, UI::WindowsAndMessaging::*},
+    Win32::{
+        Foundation::*,
+        Graphics::Gdi::{GET_STOCK_OBJECT_FLAGS, WHITE_BRUSH},
+        UI::WindowsAndMessaging::*,
+    },
 };
 
 use super::load_cursor;
@@ -12,6 +16,7 @@ pub struct WinCreateArgs {
     pub instance: HINSTANCE,
     pub icon: Option<PCWSTR>,
     pub cursor: HCURSOR,
+    pub brush: GET_STOCK_OBJECT_FLAGS,
     pub menu_name: PCWSTR,
     pub window_height: i32,
     pub window_width: i32,
@@ -29,6 +34,7 @@ impl Default for WinCreateArgs {
             menu_name: w!(""),
             window_height: CW_USEDEFAULT,
             window_width: CW_USEDEFAULT,
+            brush: WHITE_BRUSH,
         }
     }
 }

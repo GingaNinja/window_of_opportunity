@@ -6,6 +6,7 @@ pub struct DeviceContext {
     ps: Option<PAINTSTRUCT>,
     hwnd: HWND,
     tabs: Vec<i32>,
+    no_release: bool,
 }
 
 impl DeviceContext {
@@ -15,10 +16,22 @@ impl DeviceContext {
             hdc = GetDC(hwnd);
         }
         DeviceContext {
-            hwnd: hwnd,
-            hdc: hdc,
+            hwnd,
+            hdc,
             ps: None,
             tabs: Vec::new(),
+            no_release: false,
+        }
+    }
+
+    pub fn new(hdc_in: HDC, hwnd: HWND) -> Self {
+        let hdc = hdc_in;
+        DeviceContext {
+            hwnd,
+            hdc,
+            ps: None,
+            tabs: vec![],
+            no_release: true,
         }
     }
 
@@ -33,10 +46,11 @@ impl DeviceContext {
             hdc = BeginPaint(hwnd, &mut ps);
         }
         DeviceContext {
-            hdc: hdc,
+            hdc,
             ps: Some(ps),
             hwnd,
             tabs: Vec::new(),
+            no_release: false,
         }
     }
 
@@ -62,15 +76,36 @@ impl DeviceContext {
         }
     }
 
+    pub fn calc_text_height(&self, text: &str, rect: &mut RECT) -> i32 {
+        unsafe {
+            DrawTextExW(
+                self.hdc,
+                &mut get_utf16_vec(text)[..],
+                rect,
+                DT_LEFT | DT_TOP | DT_WORDBREAK | DT_CALCRECT,
+                None,
+            )
+        }
+    }
+
     pub fn draw_text(&self, text: &str, rect: &mut RECT) {
         unsafe {
             DrawTextW(
                 self.hdc,
                 &mut get_utf16_vec(text)[..],
                 rect,
-                DT_SINGLELINE | DT_CENTER | DT_VCENTER,
+                DT_LEFT | DT_TOP | DT_WORDBREAK,
+                // DT_SINGLELINE | DT_CENTER | DT_VCENTER,
             );
         }
+    }
+
+    pub fn get_text_extent_point(&self, text: &str) -> (i32, i32) {
+        let mut size = SIZE::default();
+        unsafe {
+            let _ = GetTextExtentPoint32W(self.hdc, &mut get_utf16_vec(text), &mut size);
+        }
+        (size.cx, size.cy)
     }
 
     pub fn move_to(&self, x: i32, y: i32) -> bool {
@@ -92,9 +127,13 @@ impl DeviceContext {
     pub fn ellipse(&self, l: i32, t: i32, r: i32, b: i32) -> bool {
         unsafe { Ellipse(self.hdc, l, t, r, b).as_bool() }
     }
-
     pub fn round_rect(&self, l: i32, t: i32, r: i32, b: i32, x_corn: i32, y_corn: i32) -> bool {
         unsafe { RoundRect(self.hdc, l, t, r, b, x_corn, y_corn).as_bool() }
+    }
+    pub fn fill_rect(&self, rect: &RECT, brush: HBRUSH) {
+        unsafe {
+            let _ = FillRect(self.hdc, rect, brush);
+        }
     }
 
     pub fn poly_bezier(&self, points: &[POINT]) -> bool {
@@ -135,6 +174,9 @@ impl DeviceContext {
 
 impl Drop for DeviceContext {
     fn drop(&mut self) {
+        if self.no_release {
+            return;
+        }
         unsafe {
             match self.ps {
                 None => {
@@ -147,7 +189,7 @@ impl Drop for DeviceContext {
         }
     }
 }
-
+#[allow(dead_code)]
 pub struct Pen {
     style: PEN_STYLE,
     color: u32,
@@ -165,7 +207,7 @@ impl Pen {
         }
     }
 
-    pub fn create_pen(style: PEN_STYLE, width: i32, hex_color: u32) -> HPEN {
+    fn create_pen(style: PEN_STYLE, width: i32, hex_color: u32) -> HPEN {
         unsafe { CreatePen(style, width, COLORREF(hex_color)) }
     }
 

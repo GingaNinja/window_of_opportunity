@@ -1,4 +1,4 @@
-use crate::default_win_impl;
+use crate::{app::ReactiveEvent, default_win_impl};
 
 use super::{
     dc::DeviceContext, hword, kbd::KbdEvent, load_icon, lword, mouse::MouseEvent,
@@ -8,7 +8,12 @@ use super::{
 use std::mem;
 use windows::{
     core::*,
-    Win32::{Foundation::*, Graphics::Gdi::*, UI::WindowsAndMessaging::*},
+    Win32::{
+        Foundation::*,
+        Graphics::Gdi::*,
+        System::WindowsProgramming::MulDiv,
+        UI::{HiDpi::GetDpiForWindow, WindowsAndMessaging::*},
+    },
 };
 
 pub trait Win {
@@ -27,10 +32,20 @@ pub trait Win {
             ShowWindow(self.get_hwnd(), SW_NORMAL).as_bool()
         }
     }
-    fn set_child(&mut self, child: Component);
+    fn set_child(&mut self, child: Box<dyn Component>);
 
     fn update(&self) -> bool {
         unsafe { UpdateWindow(self.get_hwnd()).as_bool() }
+    }
+
+    fn get_dpi(&self) -> u32 {
+        unsafe { GetDpiForWindow(self.get_hwnd()) }
+    }
+
+    fn set_window_pos(&mut self, x: i32, y: i32, width: i32, height: i32) {
+        unsafe {
+            SetWindowPos(self.get_hwnd(), HWND_TOP, x, y, width, height, SWP_NOZORDER).unwrap();
+        }
     }
 
     fn invalidate(&self, erase: bool) -> bool {
@@ -46,6 +61,7 @@ pub trait Win {
     }
 
     fn on_create(&mut self, _event: &Event) -> EventHandled {
+        println!("in Win on_create");
         EventHandled::NotHandled
     }
 
@@ -61,15 +77,17 @@ pub trait Win {
         EventHandled::NotHandled
     }
 
-    fn on_command(&self, event: &CommandEvent) -> EventHandled {
-        println!("command... {:?}", event);
-        match event.command {
-            100 => {
-                self.send_message(SendMessageParams::Close);
-                EventHandled::Handled(LRESULT(0))
-            }
-            _ => EventHandled::NotHandled,
-        }
+    fn on_command(&mut self, _event: &CommandEvent) -> EventHandled {
+        println!("in Win on_command");
+        // println!("command... {:?}", event);
+        // match event.command {
+        //     100 => {
+        //         self.send_message(SendMessageParams::Close);
+        //         EventHandled::Handled(LRESULT(0))
+        //     }
+        //     _ => EventHandled::NotHandled,
+        // }
+        EventHandled::NotHandled
     }
 
     fn on_mouse(&mut self, _event: MouseEvent) -> EventHandled {
@@ -115,6 +133,8 @@ pub trait Win {
             SetWindowTextW(self.get_hwnd(), text).unwrap();
         }
     }
+
+    fn update_child_dpi(&mut self, _dpi: u32) {}
 
     fn create_window(&mut self, title: PCWSTR) -> Result<HWND>;
     fn create_window_with_args(
@@ -185,8 +205,28 @@ pub trait Win {
                 Some(self as *const _ as _),
             );
         }
+        let dpi = self.get_dpi();
+        self.update_child_dpi(dpi);
+        let scaled_width;
+        let scaled_height;
+        unsafe {
+            scaled_width = MulDiv(create_args.window_width, dpi as i32, 96);
+            scaled_height = MulDiv(create_args.window_height, dpi as i32, 96);
+        };
+        let x = self.get_base().left;
+        let y = self.get_base().top;
+        self.set_window_pos(x, y, scaled_width, scaled_height);
         hwnd
     }
+    //  void UpdateButtonLayoutForDpi(HWND hWnd)
+    // {
+    //     int iDpi = GetDpiForWindow(hWnd);
+    //     int dpiScaledX = MulDiv(INITIALX_96DPI, iDpi, USER_DEFAULT_SCREEN_DPI);
+    //     int dpiScaledY = MulDiv(INITIALY_96DPI, iDpi, USER_DEFAULT_SCREEN_DPI);
+    //     int dpiScaledWidth = MulDiv(INITIALWIDTH_96DPI, iDpi, USER_DEFAULT_SCREEN_DPI);
+    //     int dpiScaledHeight = MulDiv(INITIALHEIGHT_96DPI, iDpi, USER_DEFAULT_SCREEN_DPI);
+    //     SetWindowPos(hWnd, hWnd, dpiScaledX, dpiScaledY, dpiScaledWidth, dpiScaledHeight, SWP_NOZORDER | SWP_NOACTIVATE);
+    // }
 
     fn dispatch_event(&mut self, event: &Event) -> LRESULT {
         if self.get_canary() != 99 {
@@ -199,6 +239,8 @@ pub trait Win {
                 if let Ok(rect) = self.get_window_rect() {
                     self.get_base().x = rect.right - rect.left;
                     self.get_base().y = rect.bottom - rect.top;
+                    self.get_base().left = rect.left;
+                    self.get_base().top = rect.top;
                 }
                 self.on_create(event)
             }
@@ -235,6 +277,7 @@ pub trait Win {
             WM_DESTROY => self.on_destroy(event),
             WM_NCDESTROY => self.on_ncdestroy(event),
             WM_COMMAND => {
+                println!("it's a command...");
                 let command_type = match hword(event.wparam.0 as isize) {
                     0 => SourceType::Menu,
                     1 => SourceType::Accelerator,
@@ -329,75 +372,110 @@ pub trait Win {
         }
 
         let event = super::Event {
-            hwnd: hwnd,
-            message: message,
-            wparam: wparam,
-            lparam: lparam,
+            hwnd,
+            message,
+            wparam,
+            lparam,
         };
         ref_self.dispatch_event(&event)
     }
 }
+// pub trait Element: std::fmt::Debug {
+//     fn create_element(
+//         &mut self,
+//         parent: HWND,
+//         instance: HINSTANCE,
+//         parent_rect: &RECT,
+//     ) -> Result<()>;
+//     // we should have a drop for removing elements
+//     fn set_window_position(&mut self, x: i32, y: i32, width: i32, height: i32);
+//     fn get_dimensions(&self) -> (i32, i32);
+// }
 
-pub trait Element {
+pub trait Container: std::fmt::Debug + Component {
+    // fn get_child(&self, i: usize) -> ComponentWrapper;
+}
+// pub trait Container: std::fmt::Debug {
+//     fn create_container(
+//         &mut self,
+//         parent: HWND,
+//         instance: HINSTANCE,
+//         parent_rect: &RECT,
+//     ) -> Result<()>;
+//     fn add_child(&mut self, child: Component);
+//     fn set_window_position(&mut self, x: i32, y: i32, width: i32, height: i32);
+//     fn get_dimensions(&self) -> (i32, i32);
+// }
+
+pub trait Component: std::fmt::Debug {
+    fn set_event_callback(&mut self, callback: impl FnMut(ReactiveEvent) -> () + 'static) -> ();
     fn create_element(
         &mut self,
         parent: HWND,
         instance: HINSTANCE,
         parent_rect: &RECT,
-    ) -> Result<()>;
-    // we should have a drop for removing elements
-    fn update_available_space(&mut self, x: i32, y: i32);
-}
-
-pub trait Container {
-    fn create_container(
-        &mut self,
-        parent: HWND,
-        instance: HINSTANCE,
-        parent_rect: &RECT,
-    ) -> Result<()>;
-    fn add_child(&mut self, child: Component);
-    fn update_available_space(&mut self, x: i32, y: i32);
-}
-
-pub enum Component {
-    Element(Box<dyn Element>),
-    Container(Box<dyn Container>),
-}
-
-impl Component {
-    pub fn create_element(
-        &mut self,
-        parent: HWND,
-        instance: HINSTANCE,
-        parent_rect: &RECT,
-    ) -> Result<()> {
-        match self {
-            Component::Element(el) => el.create_element(parent, instance, parent_rect),
-            Component::Container(con) => con.create_container(parent, instance, parent_rect),
-        }
-    }
-
-    pub fn update_available_space(&mut self, x: i32, y: i32) {
-        match self {
-            Component::Element(el) => el.update_available_space(x, y),
-            Component::Container(con) => con.update_available_space(x, y),
-        }
+    ) -> Result<HWND>;
+    fn set_window_position(&mut self, x: i32, y: i32, width: i32, height: i32);
+    fn update_dpi(&mut self, _dpi: u32) {}
+    fn get_dimensions(&self) -> (i32, i32);
+    fn swap_node_with_nodes(&mut self, _index: usize, _nodes: Vec<Box<dyn Component>>) {}
+    fn get_child(&mut self, _i: usize) -> &mut Box<dyn Component> {
+        panic!("there is no child, or get_child not implemented");
     }
 }
 
+// #[derive(Debug)]
+// pub enum Component {
+//     Element(Box<dyn Element>),
+//     Container(Box<dyn Container>),
+//     WindowPlaceholder,
+// }
+
+// impl Component {
+//     pub fn create_element(
+//         &mut self,
+//         parent: HWND,
+//         instance: HINSTANCE,
+//         parent_rect: &RECT,
+//     ) -> Result<()> {
+//         match self {
+//             Component::Element(el) => el.create_element(parent, instance, parent_rect),
+//             Component::Container(con) => con.create_container(parent, instance, parent_rect),
+//             Component::WindowPlaceholder => Ok(()),
+//         }
+//     }
+
+//     pub fn set_window_position(&mut self, x: i32, y: i32, width: i32, height: i32) {
+//         match self {
+//             Component::Element(el) => el.set_window_position(x, y, width, height),
+//             Component::Container(con) => con.set_window_position(x, y, width, height),
+//             Component::WindowPlaceholder => (),
+//         }
+//     }
+
+//     pub fn get_dimensions(&self) -> (i32, i32) {
+//         match self {
+//             Component::Element(el) => el.get_dimensions(),
+//             Component::Container(con) => con.get_dimensions(),
+//             Component::WindowPlaceholder => (0, 0),
+//         }
+//     }
+// }
+
+#[derive(Debug)]
 pub struct Button {
-    id: i32,
-    name: PCWSTR,
+    id: usize,
+    name: String,
     hwnd: HWND,
     x: i32,
     y: i32,
     width: i32,
     height: i32,
+    font: HFONT,
 }
 
 impl Button {
-    pub fn new(id: i32, name: PCWSTR) -> Self {
+    pub fn new(id: usize, name: String) -> Self {
         Button {
             id,
             name,
@@ -405,8 +483,12 @@ impl Button {
             x: 0,
             y: 0,
             width: 10,
-            height: 10,
+            height: 20,
+            font: HFONT::default(),
         }
+    }
+    pub fn get_id(&self) -> usize {
+        self.id
     }
     pub fn with_x(mut self, x: i32) -> Self {
         self.x = x;
@@ -424,24 +506,34 @@ impl Button {
         self.height = height;
         self
     }
-    pub fn with_text(mut self, text: PCWSTR) -> Self {
+    pub fn with_text(mut self, text: String) -> Self {
         self.name = text;
         self
     }
+
+    fn set_window_pos(&mut self, x: i32, y: i32, width: i32, height: i32) {
+        unsafe {
+            SetWindowPos(self.hwnd, HWND_TOP, x, y, width, height, SWP_NOZORDER).unwrap();
+        }
+    }
 }
 
-impl Element for Button {
+impl Component for Button {
+    fn set_event_callback(&mut self, _callback: impl FnMut(ReactiveEvent) -> () + 'static) -> () {
+        println!("button event callback");
+    }
     fn create_element(
         &mut self,
         parent: HWND,
         instance: HINSTANCE,
         _parent_rect: &RECT,
-    ) -> Result<()> {
+    ) -> Result<HWND> {
         unsafe {
+            let name = HSTRING::from(&self.name);
             match CreateWindowExW(
                 WS_EX_LEFT,
                 w!("button"),
-                self.name,
+                PCWSTR(name.as_ptr()),
                 WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_PUSHBUTTON as u32),
                 self.x,
                 self.y,
@@ -454,23 +546,64 @@ impl Element for Button {
             ) {
                 Ok(hwnd) => {
                     self.hwnd = hwnd;
-                    Ok(())
+                    Ok(hwnd)
                 }
                 Err(err) => Err(err),
             }
         }
     }
 
-    fn update_available_space(&mut self, x: i32, y: i32) {
-        self.width = x;
-        self.height = y;
+    fn update_dpi(&mut self, dpi: u32) {
+        println!("text dpi: {dpi}");
+        let actual_font_size;
+        unsafe {
+            actual_font_size = MulDiv(16, dpi as i32, 96);
+            self.height = MulDiv(30, dpi as i32, 96);
+        }
+
+        let h_font;
+        unsafe {
+            h_font = CreateFontW(
+                actual_font_size,
+                0,
+                0,
+                0,
+                FW_NORMAL.0 as i32,
+                0,
+                0,
+                0,
+                DEFAULT_CHARSET.0 as u32,
+                OUT_DEFAULT_PRECIS.0 as u32,
+                CLIP_DEFAULT_PRECIS.0 as u32,
+                CLEARTYPE_QUALITY.0 as u32,
+                0,
+                w!("Segoe UI"),
+            );
+        }
+        self.font = h_font;
+        unsafe {
+            SendMessageW(
+                self.hwnd,
+                WM_SETFONT,
+                WPARAM(self.font.0 as usize),
+                LPARAM(TRUE.0 as isize),
+            );
+        }
+    }
+
+    fn set_window_position(&mut self, x: i32, y: i32, width: i32, _height: i32) {
+        self.width = width;
+        self.set_window_pos(x, y, width, self.height);
+    }
+    fn get_dimensions(&self) -> (i32, i32) {
+        (self.width, self.height)
     }
 }
 
 pub struct MainWindow {
     base: BaseWin,
     inst: HINSTANCE,
-    child: Option<Component>,
+    child: Option<Box<dyn Component>>,
     created: bool,
 }
 
@@ -480,7 +613,7 @@ impl Win for MainWindow {
     fn new(inst: HINSTANCE) -> Self {
         MainWindow {
             base: BaseWin::default(),
-            inst: inst,
+            inst,
             child: None,
             created: false,
         }
@@ -493,7 +626,7 @@ impl Win for MainWindow {
         self.create_win(title, create_args, self.inst)
     }
 
-    fn set_child(&mut self, mut child: Component) {
+    fn set_child(&mut self, mut child: Box<dyn Component>) {
         if self.created {
             let rect = RECT {
                 left: 0,
