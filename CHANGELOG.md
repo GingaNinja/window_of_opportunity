@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/GingaNinja/window_of_opportunity/compare/v0.1.2...v0.2.0) - 2026-09-17
+
+### Added
+
+- add a menu so we can use cmd+q/cmd+w
+- set title from WindowSpec (and ui! macro)
+
 ## [0.1.2](https://github.com/GingaNinja/window_of_opportunity/compare/v0.1.1...v0.1.2) - 2026-09-17
 
 ### Fixed
