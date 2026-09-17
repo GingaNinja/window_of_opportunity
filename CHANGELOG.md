@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/GingaNinja/window_of_opportunity/compare/v0.1.1...v0.1.2) - 2026-09-17
+
+### Fixed
+
+- pass the 2 doc tests
+
+### Other
+
+- Update release-plz.yml
+- add dependabot
+- Create rust.yml
+- Create release-plz action
+
 ## [0.1.1](https://github.com/GingaNinja/window_of_opportunity/compare/v0.1.0...v0.1.1) - 2026-09-17
 
 ### Other
