@@ -33,6 +33,7 @@ pub struct WindowSpec {
     pub width: Option<f64>,
     pub height: Option<f64>,
     pub resizable: bool,
+    pub title: String,
 }
 
 pub fn window_spec(tree: &Element) -> WindowSpec {
@@ -41,6 +42,7 @@ pub fn window_spec(tree: &Element) -> WindowSpec {
     WindowSpec {
         width: num("width"),
         height: num("height"),
+        title: tree.props.get("title").unwrap_or(&"".to_string()).clone(),
         resizable: tree
             .props
             .get("resizable")

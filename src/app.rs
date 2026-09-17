@@ -270,6 +270,8 @@ impl AppState {
             }
         }
 
+        self.window.set_title(&spec.title);
+
         // Size the window. Explicit props win; missing axes hug the content.
         // fittingSize is the smallest size that satisfies the constraint
         // system — for an unpinned axis that's the content's natural size.
