@@ -85,8 +85,14 @@ impl Component for Window {
         _children: Vec<Box<window_of_opportunity::element::Element>>,
     ) -> Box<window_of_opportunity::element::Element> {
         let (w, h) = ctx.use_state("window/size", || (640., 820.));
+        let first = ctx.use_state("first", || true);
+        let title = if first {
+            "One message"
+        } else {
+            "Another message"
+        };
         ui! {
-            Window width(w) height(h)
+            Window width(w) height(h) title(title)
                    on_resize(|state, w, h|
                        state.update("window/size", |s: &mut (f64, f64)| *s = (w, h))) {
                 { Div direction("column") gap(10.) padding(16.) {
