@@ -10,7 +10,7 @@
 //! doing so, but currently it's just a blank window
 //! that can be drawn on with an onPaint event handler.
 
-use std::{any::Any, rc::Rc};
+use std::{any::Any, cell::RefCell, rc::Rc};
 
 pub use self::win::Win;
 
@@ -192,6 +192,7 @@ pub fn render(mut vdom: VirtualDom) -> Result<()> {
     // app.main_win.set_created_callback(move |win| {
     //     vdom.rebuild(win);
     // });
+    let main_win = &mut app.main_win;
     app.main_win.set_event_callback(move |win, event| {
         match event {
             app::ReactiveEvent::Created => vdom.rebuild(win),
@@ -297,8 +298,8 @@ macro_rules! default_win_impl {
             self.base.canary
         }
 
-        fn get_base(&mut self) -> &mut BaseWin {
-            &mut self.base
+        fn get_base(&self) -> &BaseWin {
+            &self.base
         }
     };
 }
@@ -307,11 +308,11 @@ macro_rules! default_win_impl {
 pub struct BaseWin {
     pub hwnd: HWND,
     pub canary: i32,
-    pub tm: TEXTMETRICW,
-    pub x: i32,
-    pub y: i32,
-    pub left: i32,
-    pub top: i32,
+    pub tm: RefCell<TEXTMETRICW>,
+    pub x: RefCell<i32>,
+    pub y: RefCell<i32>,
+    pub left: RefCell<i32>,
+    pub top: RefCell<i32>,
     // cx_char: i32,
     // cx_caps: i32,
     // cy_char: i32,
@@ -323,19 +324,20 @@ impl Default for BaseWin {
         Self {
             hwnd: HWND::default(),
             canary: 99,
-            tm: TEXTMETRICW::default(),
-            x: 0,
-            y: 0,
-            left: 0,
-            top: 0,
+            tm: RefCell::new(TEXTMETRICW::default()),
+            x: RefCell::new(0),
+            y: RefCell::new(0),
+            left: RefCell::new(0),
+            top: RefCell::new(0),
         }
     }
 }
 
 impl BaseWin {
-    pub fn on_create(&mut self, _event: &Event) {
+    pub fn on_create(&self, _event: &Event) {
         let dc = DeviceContext::get_dc(self.hwnd);
-        self.tm = dc.text_metrics();
+
+        *self.tm.borrow_mut() = dc.text_metrics();
     }
     //     let hdc = get_dc(event.hwnd);
     //     let mut tm = TEXTMETRICW::default();
@@ -357,9 +359,9 @@ impl BaseWin {
     //     EventHandled::Handled(LRESULT(0))
     // }
 
-    pub fn on_resize(&mut self, x: i32, y: i32) -> EventHandled {
-        self.x = x;
-        self.y = y;
+    pub fn on_resize(&self, x: i32, y: i32) -> EventHandled {
+        *self.x.borrow_mut() = x;
+        *self.y.borrow_mut() = y;
         // let si = SCROLLINFO {
         //     cbSize: mem::size_of::<SCROLLINFO>() as u32,
         //     fMask: SIF_RANGE | SIF_PAGE,

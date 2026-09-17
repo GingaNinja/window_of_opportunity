@@ -2,14 +2,16 @@ use crate::app::ReactiveEvent;
 use crate::dc::DeviceContext;
 use crate::kbd::KbdEvent;
 use crate::mouse::MouseEvent;
-use crate::win::Component;
+use crate::win::{Component, Observer};
 use crate::{
     default_win_impl, hword, lword, BaseWin, CommandEvent, Event, EventHandled, SourceType,
     WinCreateArgs,
 };
+use std::cell::RefCell;
 use std::ffi::c_void;
 use std::fmt::Debug;
 use std::mem;
+use std::rc::{Rc, Weak};
 use windows::Win32::System::WindowsProgramming::MulDiv;
 use windows::{
     core::*,
@@ -59,7 +61,7 @@ pub trait CustomComponent {
         Ok(())
     }
 
-    fn on_command(&mut self, event: &CommandEvent) -> EventHandled {
+    fn on_command(self: Rc<Self>, event: &CommandEvent) -> EventHandled {
         println!("command... {:?}", event);
         match event.command {
             100 => {
@@ -86,7 +88,7 @@ pub trait CustomComponent {
         EventHandled::NotHandled
     }
 
-    fn on_create(&mut self, _event: &Event) -> EventHandled {
+    fn on_create(self: Rc<Self>, _event: &Event) -> EventHandled {
         EventHandled::NotHandled
     }
 
@@ -110,7 +112,7 @@ pub trait CustomComponent {
         EventHandled::NotHandled
     }
 
-    fn dispatch_event(&mut self, event: &Event) -> LRESULT {
+    fn dispatch_event(&self, event: &Event) -> LRESULT {
         if self.get_canary() != 99 {
             println!("error: canary is not 99!");
             return LRESULT(1);
@@ -264,13 +266,12 @@ pub trait CustomComponent {
 pub struct Div {
     base: BaseWin,
     inst: HINSTANCE,
-    pub children: Vec<Box<dyn Component>>,
-    created: bool,
-    created_callback: Option<Box<dyn FnMut(&mut Div) -> ()>>,
+    pub children: Vec<Rc<dyn Component>>,
+    created: RefCell<bool>,
+    observers: RefCell<Vec<Weak<dyn Observer>>>,
     hwnd: HWND,
     bk_color: u32,
     bk_brush: HBRUSH,
-    event_callback: Option<Box<dyn FnMut(ReactiveEvent) -> ()>>,
 }
 
 impl Debug for Div {
@@ -294,8 +295,7 @@ impl Debug for Div {
             hwnd,
             bk_color,
             bk_brush: _,
-            created_callback: _,
-            event_callback: _,
+            observers: _,
         } = self;
 
         std::fmt::Debug::fmt(
@@ -314,9 +314,11 @@ impl Debug for Div {
 
 impl CustomComponent for Div {
     default_win_impl!();
-    fn on_create(&mut self, _event: &Event) -> EventHandled {
-        self.created = true;
-        let x = self.get_base().x;
+    fn on_create(self: Rc<Self>, _event: &Event) -> EventHandled {
+        let self_ref = self.clone();
+        let mut created = self_ref.created.borrow_mut();
+        *created = true;
+        let x = self.clone().get_base().x;
         let y = self.get_base().y;
         let hwnd = self.get_hwnd();
         for i in 0..self.children.len() {
@@ -328,31 +330,17 @@ impl CustomComponent for Div {
             };
             // println!("rect: {rect:?}");
 
-            let child = &mut self.children[i];
+            let child = &self.children[i];
             child.create_element(hwnd, self.inst, &rect).unwrap();
         }
         println!("created div...");
-        let callback = self.event_callback.take();
-        if let Some(mut callback) = callback {
-            println!("calling callback...");
-            callback(ReactiveEvent::Created);
-
-            self.event_callback = Some(callback);
-        } else {
-            self.event_callback = None;
-        }
+        self.send_to_observers(ReactiveEvent::Created);
         EventHandled::Handled(LRESULT(0))
     }
 
-    fn on_command(&mut self, event: &CommandEvent) -> EventHandled {
+    fn on_command(self: Rc<Self>, event: &CommandEvent) -> EventHandled {
         println!("button clicked in div");
-        let callback = self.event_callback.take();
-        if let Some(mut callback) = callback {
-            callback(ReactiveEvent::Command);
-            self.event_callback = Some(callback);
-        } else {
-            self.event_callback = None;
-        }
+        self.send_to_observers(ReactiveEvent::Command);
         EventHandled::Handled(LRESULT(0))
     }
 
@@ -393,15 +381,15 @@ impl Component for Div {
         }
     }
 
-    fn get_child(&mut self, i: usize) -> &mut Box<dyn Component> {
+    fn get_child(&self, i: usize) -> Rc<dyn Component> {
         // panic!("doesn't work");
-        &mut self.children[i]
+        self.children[i].clone()
     }
 
-    fn set_event_callback(&mut self, callback: impl FnMut(ReactiveEvent) -> () + 'static) -> () {
-        self.event_callback = Some(Box::new(callback));
-    }
-    fn swap_node_with_nodes(&mut self, index: usize, mut nodes: Vec<Box<dyn Component>>) {
+    // fn set_event_callback(&mut self, callback: Box<dyn Fn(ReactiveEvent)) {
+    //     self.event_callback = Some(Box::new(RefCell::new(callback)));
+    // }
+    fn swap_node_with_nodes(&mut self, index: usize, mut nodes: Vec<Rc<dyn Component>>) {
         let item = nodes.remove(0);
         // let (item, rest) = nodes.split_first().unwrap();
         self.children.push(item);
@@ -420,7 +408,7 @@ impl Component for Div {
 
     fn update_dpi(&mut self, dpi: u32) {
         for i in 0..self.children.len() {
-            self.children[i].update_dpi(dpi);
+            self.children[i].clone().update_dpi(dpi);
         }
     }
 
@@ -459,6 +447,15 @@ impl Div {
         div
     }
 
+    fn send_to_observers(self, event: ReactiveEvent) {
+        let observers = self.observers.borrow();
+        for observer in observers.iter() {
+            if let Some(observer) = observer.upgrade() {
+                println!("calling callback...");
+                observer.notify(event.clone());
+            }
+        }
+    }
     pub fn set_bk_colour(&mut self, hex: u32) {
         let brush;
         unsafe {
@@ -480,6 +477,14 @@ impl Div {
         self.create_comp(&create_args)
     }
     pub fn add_child(&mut self, mut child: Box<dyn Component>) {
+        println!("setting callback in div");
+        child.set_event_callback(Box::new(|event| {
+            let callback = self.event_callback.as_ref();
+            if let Some(callback) = callback {
+                (callback.borrow_mut())(event);
+            }
+            println!("event passed to div");
+        }));
         if self.created {
             child
                 .create_element(
@@ -546,10 +551,6 @@ impl CustomComponent for Text {
         self.font = h_font;
         EventHandled::NotHandled
     }
-
-    fn set_event_callback(&mut self, callback: impl FnMut(ReactiveEvent) -> () + 'static) -> () {
-        todo!()
-    }
 }
 
 impl Component for Text {
@@ -610,6 +611,7 @@ impl Component for Text {
         self.font = h_font;
     }
 
+    fn set_event_callback(&mut self, callback: Box<dyn Fn(ReactiveEvent) + '_>) {}
     fn set_window_position(&mut self, x: i32, y: i32, width: i32, height: i32) {
         let actual_y = {
             let dc = DeviceContext::get_dc(self.get_hwnd());

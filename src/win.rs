@@ -5,7 +5,7 @@ use super::{
     win_create_args::WinCreateArgs, BaseWin, CommandEvent, Event, EventHandled, SendMessageParams,
     SourceType,
 };
-use std::mem;
+use std::{mem, rc::Rc, rc::Weak};
 use windows::{
     core::*,
     Win32::{
@@ -23,7 +23,7 @@ pub trait Win {
     fn get_canary(&self) -> i32 {
         10
     }
-    fn get_base(&mut self) -> &mut BaseWin;
+    fn get_base(&self) -> &BaseWin;
     fn to_self_ptr(c_void: *mut ::core::ffi::c_void) -> *mut Self;
     fn raw_ptr_isize(ptr: *mut Self) -> isize;
     fn show(&self) -> bool {
@@ -42,7 +42,7 @@ pub trait Win {
         unsafe { GetDpiForWindow(self.get_hwnd()) }
     }
 
-    fn set_window_pos(&mut self, x: i32, y: i32, width: i32, height: i32) {
+    fn set_window_pos(&self, x: i32, y: i32, width: i32, height: i32) {
         unsafe {
             SetWindowPos(self.get_hwnd(), HWND_TOP, x, y, width, height, SWP_NOZORDER).unwrap();
         }
@@ -128,7 +128,7 @@ pub trait Win {
         Ok(rect)
     }
 
-    fn set_window_text(&mut self, text: PCWSTR) {
+    fn set_window_text(&self, text: PCWSTR) {
         unsafe {
             SetWindowTextW(self.get_hwnd(), text).unwrap();
         }
@@ -213,9 +213,9 @@ pub trait Win {
             scaled_width = MulDiv(create_args.window_width, dpi as i32, 96);
             scaled_height = MulDiv(create_args.window_height, dpi as i32, 96);
         };
-        let x = self.get_base().left;
-        let y = self.get_base().top;
-        self.set_window_pos(x, y, scaled_width, scaled_height);
+        let x = self.get_base().left.borrow();
+        let y = self.get_base().top.borrow();
+        self.set_window_pos(*x, *y, scaled_width, scaled_height);
         hwnd
     }
     //  void UpdateButtonLayoutForDpi(HWND hWnd)
@@ -237,10 +237,10 @@ pub trait Win {
             WM_CREATE => {
                 self.get_base().on_create(event);
                 if let Ok(rect) = self.get_window_rect() {
-                    self.get_base().x = rect.right - rect.left;
-                    self.get_base().y = rect.bottom - rect.top;
-                    self.get_base().left = rect.left;
-                    self.get_base().top = rect.top;
+                    *self.get_base().x.borrow_mut() = rect.right - rect.left;
+                    *self.get_base().y.borrow_mut() = rect.bottom - rect.top;
+                    *self.get_base().left.borrow_mut() = rect.left;
+                    *self.get_base().top.borrow_mut() = rect.top;
                 }
                 self.on_create(event)
             }
@@ -392,9 +392,9 @@ pub trait Win {
 //     fn get_dimensions(&self) -> (i32, i32);
 // }
 
-pub trait Container: std::fmt::Debug + Component {
-    // fn get_child(&self, i: usize) -> ComponentWrapper;
-}
+// pub trait Container: std::fmt::Debug + Component {
+//     // fn get_child(&self, i: usize) -> ComponentWrapper;
+// }
 // pub trait Container: std::fmt::Debug {
 //     fn create_container(
 //         &mut self,
@@ -407,8 +407,15 @@ pub trait Container: std::fmt::Debug + Component {
 //     fn get_dimensions(&self) -> (i32, i32);
 // }
 
-pub trait Component: std::fmt::Debug {
-    fn set_event_callback(&mut self, callback: impl FnMut(ReactiveEvent) -> () + 'static) -> ();
+pub trait Observer {
+    fn notify(&self, event: ReactiveEvent);
+}
+
+pub trait Observable {
+    fn register(&self, observer: Weak<dyn Observer>);
+}
+
+pub trait Component: std::fmt::Debug + Observable {
     fn create_element(
         &mut self,
         parent: HWND,
@@ -416,10 +423,10 @@ pub trait Component: std::fmt::Debug {
         parent_rect: &RECT,
     ) -> Result<HWND>;
     fn set_window_position(&mut self, x: i32, y: i32, width: i32, height: i32);
-    fn update_dpi(&mut self, _dpi: u32) {}
+    fn update_dpi(&self, _dpi: u32) {}
     fn get_dimensions(&self) -> (i32, i32);
-    fn swap_node_with_nodes(&mut self, _index: usize, _nodes: Vec<Box<dyn Component>>) {}
-    fn get_child(&mut self, _i: usize) -> &mut Box<dyn Component> {
+    fn swap_node_with_nodes(&mut self, _index: usize, _nodes: Vec<Rc<dyn Component>>) {}
+    fn get_child(&self, _i: usize) -> Rc<dyn Component> {
         panic!("there is no child, or get_child not implemented");
     }
 }
@@ -518,10 +525,13 @@ impl Button {
     }
 }
 
-impl Component for Button {
-    fn set_event_callback(&mut self, _callback: impl FnMut(ReactiveEvent) -> () + 'static) -> () {
-        println!("button event callback");
+impl Observable for Button {
+    fn register(&self, observer: Weak<dyn Observer>) {
+        todo!()
     }
+}
+
+impl Component for Button {
     fn create_element(
         &mut self,
         parent: HWND,
@@ -631,8 +641,8 @@ impl Win for MainWindow {
             let rect = RECT {
                 left: 0,
                 top: 0,
-                right: self.get_base().x,
-                bottom: self.get_base().y,
+                right: *self.get_base().x.borrow(),
+                bottom: *self.get_base().y.borrow(),
             };
             child
                 .create_element(self.get_hwnd(), self.inst, &rect)
@@ -656,8 +666,8 @@ impl Win for MainWindow {
             let rect = RECT {
                 left: 0,
                 top: 0,
-                right: self.get_base().x,
-                bottom: self.get_base().y,
+                right: *self.get_base().x.borrow(),
+                bottom: *self.get_base().y.borrow(),
             };
 
             child
