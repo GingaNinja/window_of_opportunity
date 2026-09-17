@@ -10,7 +10,7 @@ jobs:
   # Release unpublished packages.
   release-plz-release:
     name: Release-plz release
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     if: ${{ github.repository_owner == 'GingaNinja' }}
     permissions:
       contents: write
