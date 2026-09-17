@@ -10,6 +10,7 @@ use cacao::appkit::App;
 use cacao::{
     appkit::{
         AppDelegate,
+        menu::Menu,
         window::{Window, WindowConfig, WindowStyle},
     },
     button::Button,
@@ -959,11 +960,13 @@ impl<M: Send + Sync + 'static> ReactApp<M> {
 
 impl<M> AppDelegate for ReactApp<M> {
     fn did_finish_launching(&self) {
-        App::activate();
+        // Nib-less apps get no default menu bar: set the standard one (app
+        // menu with Quit, File > Close, Window...) — cmd+q / cmd+w come from
+        // the menu items' key equivalents.
+        App::set_menu(Menu::standard());
 
         {
             let state = self.state.borrow();
-            state.window.set_title("Hello World!");
             state.window.set_content_view(&state.content);
         }
 
@@ -972,6 +975,22 @@ impl<M> AppDelegate for ReactApp<M> {
         self.state.borrow_mut().render();
 
         self.state.borrow().window.show();
+
+        // Kick off activation after the window is ordered front — when
+        // launched from a terminal the app isn't the foreground process yet.
+        // The window becoming *key* is finished off in did_become_active,
+        // which fires once the activation handshake actually completes.
+        // Note: this probably won't work to activate the app unless it's
+        // packaged properly due to changes in MacOs.
+        App::activate();
+    }
+
+    /// The reliable place to claim focus: called after the app is genuinely
+    /// active, which may happen well after did_finish_launching (launching
+    /// from a terminal, slow activation...). makeKeyAndOrderFront only makes
+    /// a window key while the app is active, so this is where it sticks.
+    fn did_become_active(&self) {
+        self.state.borrow().window.make_key_and_order_front();
     }
 
     fn should_terminate_after_last_window_closed(&self) -> bool {
