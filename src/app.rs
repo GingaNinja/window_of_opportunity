@@ -50,7 +50,15 @@ impl Application {
     /// re-renders after each one.
     /// # Examples
     ///
-    /// ```
+    /// ```no_run
+    /// # use window_of_opportunity::{
+    /// #     app::{Application, dispatch},
+    /// #     component::Component,
+    /// #     element::{BlitFrame, Element},
+    /// #     state::Ctx,
+    /// #     ui,
+    /// # };
+    /// # use std::sync::Arc;
     /// // The app specific message type
     /// enum MyAppMsg {
     ///     FrameUpdate {
@@ -61,13 +69,32 @@ impl Application {
     ///     }
     /// }
     ///
+    /// # // MainWindow is our custom component with a `render` function.
+    /// # #[derive(Debug)]
+    /// # struct MainWindow {}
+    ///
+    /// # impl Component for MainWindow {
+    /// #    fn render(&self, ctx: &window_of_opportunity::state::Ctx, _children: Vec<Box<window_of_opportunity::element::Element>>) -> Box<window_of_opportunity::element::Element> {
+    /// #        let (w, h) = ctx.use_state("window/size", || (640., 820.));
+    /// #        ui! {
+    /// #            Window width(w) height(h)
+    /// #                on_resize(|state, w, h|
+    /// #                    state.update("window/size", |s: &mut (f64, f64)| *s = (w, h))) {
+    /// #                { Div direction("column") gap(10.) grow(true) padding(16.) background("green") {
+    /// #                    { Button {{ Text "Click Me" }} }
+    /// #                }}
+    /// #            }
+    /// #        }
+    /// #    }
+    /// # }
+    ///
     /// fn main() {
     ///     // MainWindow is a custom component with a `render` function
     ///     let main_window = Box::new(MainWindow {});
     ///     let app = Application {};
     ///
     ///     app.run(main_window, |state, message| match message {
-    ///         TracerMsg::Frame {
+    ///         MyAppMsg::FrameUpdate {
     ///             width,
     ///             height,
     ///             samples,
@@ -83,8 +110,32 @@ impl Application {
     ///         }
     ///     });
     /// }
+    /// ```
+    /// If you don't want any custom messages:
+    /// ```no_run
+    /// # use window_of_opportunity::{
+    /// #     app::{Application, dispatch},
+    /// #     component::Component,
+    /// #     element::{BlitFrame, Element},
+    /// #     state::Ctx,
+    /// #     ui,
+    /// # };
+    /// # #[derive(Debug)]
+    /// # struct Window {}
+    /// #
+    /// # impl Component for Window {
+    /// #     fn render(
+    /// #         &self,
+    /// #         _ctx: &window_of_opportunity::state::Ctx,
+    /// #         _children: Vec<Box<window_of_opportunity::element::Element>>,
+    /// #     ) -> Box<window_of_opportunity::element::Element> {
+    /// #         ui! {
+    /// #             Window {}
+    /// #             }
+    /// #         
+    /// #     }
+    /// # }
     ///
-    /// // If you don't want any custom messages
     /// fn main() {
     ///   let window = Box::new(Window {});
     ///   let app = Application {};
