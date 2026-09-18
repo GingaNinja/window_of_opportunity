@@ -6,7 +6,7 @@ Currently targetting Macos with AppKit (using Cacao under the hood), but wanting
 
 ## Features
 
-* Input boxes support internationlization because they are the native input boxes.
+* Input boxes support internationalization because they are the native input boxes.
 * Small binaries - currently the library is less than 2k lines, plus a dependency on Cacao.
 
 ## Getting started
@@ -16,8 +16,19 @@ Checkout the examples folder, there's at least one example in there which is doi
 ## Project Status
 Note, hardly anything works, but creating a basic application is possible, and there are hooks for some state.
 
-No roadmap, but some things I want to do:
-* Set title bar text (currently it's hard-coded). Should be resettable on re-renders
+| Feature | Macos | Win32 | Gtk |
+| ------- | ----- | ----- | --- |
+| Button | ✅ | ❌ | ❌ |
+| Label | ✅ | ❌ | ❌ |
+| Image (using BlitFrame) |  ✅ | ❌ | ❌ |
+| Input |  ✅ | ❌ | ❌ |
+| Window |  ✅ | ❌ | ❌ |
+| Window resizing |  ✅ | ❌ | ❌ |
+| Window title |  ✅ | ❌ | ❌ |
+| Layout |  ✅ | ❌ | ❌ |
+| List | ❌ | ❌ | ❌ |
+| Test target | ❌ | ❌ | ❌ |
+
 * Handle vec based lists
 * Add more elements - scrollviews, radiobuttons, comboboxes, selectboxes.
 * Add more properties - border, rounded corners, other events
