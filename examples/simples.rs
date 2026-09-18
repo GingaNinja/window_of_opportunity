@@ -97,6 +97,7 @@ impl Component for Window {
                        state.update("window/size", |s: &mut (f64, f64)| *s = (w, h))) {
                 { Div direction("column") gap(10.) padding(16.) {
                     { Pane }
+                    {List }
                     { Div height(80.) background("blue") {} }
                     { Div direction("row") gap(10.) height(60.) {
                         { Button { Text "Hello, and this should mean a bigger button" } }

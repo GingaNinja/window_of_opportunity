@@ -21,6 +21,7 @@ pub enum ElementType {
     Text(String),
     Input,
     Image,
+    List,
     /// A component invocation, as a tree node — expanded by the framework
     /// during render with access to state. (Rc so the enum stays Clone-able.)
     Component(Rc<dyn Component>),
@@ -67,6 +68,9 @@ macro_rules! ui {
     };
     (Image $($val:tt) *) => {
         ui! { @element Image $($val)* }
+    };
+    (List $($val:tt) *) => {
+        ui! { @element List $($val)* }
     };
     (Text $contents:expr) => {
         Box::new($crate::element::Element {

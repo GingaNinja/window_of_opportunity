@@ -20,6 +20,7 @@ use cacao::{
     image::ImageView,
     input::TextField,
     layout::{Layout, LayoutAnchorX, LayoutAnchorY, LayoutConstraint},
+    listview::ListView,
     notification_center::Dispatcher,
     objc::{class, msg_send, runtime::Object, sel, sel_impl},
     text::Label,
@@ -31,6 +32,7 @@ use crate::{
     element::{BlitFrame, Element, ElementType, window_spec},
     input::InputDelegate,
     layout::{Direction, FlexStyle},
+    listview::ReactiveListView,
     state::{Ctx, Event, Handler, State},
     widgets::{Widget, compatible, flex_changed},
     window::WindowProxy,
@@ -467,6 +469,11 @@ impl AppState {
                 label.set_text(text);
                 parent.add_subview(&label);
                 Widget::Label(label)
+            }
+            ElementType::List => {
+                let list_view = ListView::with(ReactiveListView::new());
+                parent.add_subview(&list_view);
+                Widget::List(list_view)
             }
             ElementType::Input => {
                 let delegate = InputDelegate {

@@ -7,6 +7,7 @@ use cacao::{
     image::ImageView,
     input::TextField,
     layout::{LayoutAnchorDimension, LayoutAnchorX, LayoutAnchorY, LayoutConstraint},
+    listview::ListView,
     text::Label,
     view::View,
 };
@@ -14,6 +15,7 @@ use cacao::{
 use crate::{
     element::{Element, ElementType},
     input::InputDelegate,
+    listview::ReactiveListView,
 };
 
 pub enum Widget {
@@ -32,6 +34,7 @@ pub enum Widget {
         /// refreshes the handler stored under it (no unbounded growth)
         handler_id: Option<usize>,
     },
+    List(ListView<ReactiveListView>),
     Label(Label),
     Input(TextField<InputDelegate>),
     ImageView {
@@ -63,6 +66,14 @@ impl Widget {
                 trailing: view.trailing.clone(),
                 width: view.width.clone(),
                 height: view.height.clone(),
+            },
+            Widget::List(control) => Anchors {
+                top: control.top.clone(),
+                bottom: control.bottom.clone(),
+                leading: control.leading.clone(),
+                trailing: control.trailing.clone(),
+                width: control.width.clone(),
+                height: control.height.clone(),
             },
             Widget::Button { control, .. } => Anchors {
                 top: control.top.clone(),
