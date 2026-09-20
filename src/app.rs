@@ -470,8 +470,8 @@ impl AppState {
                 parent.add_subview(&label);
                 Widget::Label(label)
             }
-            ElementType::List => {
-                let list_view = ListView::with(ReactiveListView::new());
+            ElementType::List(data) => {
+                let list_view = ListView::with(ReactiveListView::new(data));
                 parent.add_subview(&list_view);
                 Widget::List(list_view)
             }

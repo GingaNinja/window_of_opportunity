@@ -42,7 +42,11 @@ impl Component for Pane {
         };
 
         if children.is_empty() {
-            ui! { Button on_click(switch)  {{ Text text.to_string()}}}
+            ui! { Div {
+                    { Button on_click(switch)  {{ Text text.to_string()}}}
+                    { List vec!["some more things".to_string(), "again".to_string()] }
+                }
+            }
         } else {
             let children = children.remove(0);
             ui! { Div { CHILDREN children }}
@@ -97,7 +101,6 @@ impl Component for Window {
                        state.update("window/size", |s: &mut (f64, f64)| *s = (w, h))) {
                 { Div direction("column") gap(10.) padding(16.) {
                     { Pane }
-                    {List }
                     { Div height(80.) background("blue") {} }
                     { Div direction("row") gap(10.) height(60.) {
                         { Button { Text "Hello, and this should mean a bigger button" } }

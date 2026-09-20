@@ -13,9 +13,9 @@ pub struct ReactiveListView {
 }
 
 impl ReactiveListView {
-    pub fn new() -> Self {
+    pub fn new(data: &Vec<String>) -> Self {
         Self {
-            data: vec!["Hello".to_string(), "Goodbye".to_string()],
+            data: data.clone(),
             view: None,
         }
     }
