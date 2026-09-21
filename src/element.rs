@@ -21,7 +21,7 @@ pub enum ElementType {
     Text(String),
     Input,
     Image,
-    List(Vec<String>),
+    List,
     /// A component invocation, as a tree node — expanded by the framework
     /// during render with access to state. (Rc so the enum stays Clone-able.)
     Component(Rc<dyn Component>),
@@ -69,13 +69,8 @@ macro_rules! ui {
     (Image $($val:tt) *) => {
         ui! { @element Image $($val)* }
     };
-    (List $contents:expr) => {
-        Box::new($crate::element::Element {
-            element_type: $crate::element::ElementType::List($contents.into()),
-            props: HashMap::new(),
-            handlers: HashMap::new(),
-            children: vec![],
-        })
+    (List $($val:tt) *) => {
+        ui! { @element List $($val)* }
     };
     (Text $contents:expr) => {
         Box::new($crate::element::Element {
@@ -149,6 +144,10 @@ macro_rules! ui {
     (@prop $el:ident, on_change($($val:tt)*)) => {
         $el.handlers
             .insert("on_change".to_string(), $crate::state::Handler::Change(std::rc::Rc::new(($($val)*))));
+    };
+    (@prop $el:ident, on_display_item($($val:tt)*)) => {
+        $el.handlers
+            .insert("on_display_item".to_string(), $crate::state::Handler::ListItem(std::rc::Rc::new(($($val)*))));
     };
     (@prop $el:ident, $prop:ident($($val:tt)*)) => {
         // Evaluate the value at tree-build time: literal props and computed

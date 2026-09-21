@@ -134,5 +134,6 @@ pub fn compatible(widget: &Widget, new_el: &Element) -> bool {
             | (Widget::Label(_), ElementType::Text(_))
             | (Widget::Input(_), ElementType::Input)
             | (Widget::ImageView { .. }, ElementType::Image)
+            | (Widget::List(_), ElementType::List)
     )
 }

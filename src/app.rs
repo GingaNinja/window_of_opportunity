@@ -335,6 +335,59 @@ impl AppState {
         self.last_tree = Some(tree);
     }
 
+    /// Builds the row elements for a List element against current state —
+    /// the snapshot the list delegate serves from in `item_for`. Runs once
+    /// per render (mount or patch), never at display time. Count comes from
+    /// the `rows(n)` prop; the handler from `on_display_item`.
+    fn snapshot_rows(&self, el: &Element) -> Vec<Box<Element>> {
+        let count: usize = el
+            .props
+            .get("rows")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let ctx = Ctx { state: &self.state };
+        match el.handlers.get("on_display_item") {
+            Some(Handler::ListItem(handler)) => (0..count).map(|i| handler(&ctx, i)).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Mounts a row element into a list row's view. Rows are element trees
+    /// like any other — the same mount+layout pipeline the tree pass uses.
+    /// The returned Widget is kept by the row delegate: dropping it unmounts
+    /// the row's content, which is how a recycled row is cleared.
+    pub(crate) fn mount_row(&self, parent: &View, el: &Element) -> Widget {
+        let mut widget = self.mount_element(parent, el);
+
+        // Nothing else constrains the row root — pin it into the row view
+        // itself. The bottom pin is optional (yields to the root's own
+        // height), so automatic row heights fit the content.
+        let a = widget.anchors();
+        let pins = [
+            a.top.constraint_equal_to(&parent.top),
+            a.leading.constraint_equal_to(&parent.leading),
+            a.trailing.constraint_equal_to(&parent.trailing),
+            optional(a.bottom.constraint_equal_to(&parent.bottom)),
+        ];
+        LayoutConstraint::activate(&pins);
+
+        self.layout_node(el, &mut widget);
+        widget
+    }
+
+    /// Asks AppKit to re-query every list's datasource, once per completed
+    /// render. `item_for` can fire while `render()` holds the state borrow
+    /// (constraint work can trigger AppKit layout synchronously); those
+    /// calls get an unconfigured row, and this pass — run with the borrow
+    /// released — is what repaints them. Full reload every time; per-row
+    /// diffing (reload_rows) is a later refinement.
+    pub(crate) fn reload_lists(&self) {
+        let Some(root) = self.root_widget.as_ref() else {
+            return;
+        };
+        reload_lists_in(root);
+    }
+
     /// Focus snapshot before reconciling: the focused input's position, plus
     /// the field's objc pointer — so restoration can tell a *replaced* field
     /// (restore focus, cursor to end) from a *survived* one (do nothing; its
@@ -451,7 +504,7 @@ impl AppState {
                             });
                             handler_id = Some(id);
                         }
-                        Handler::Resize(_) | Handler::Change(_) => {
+                        Handler::Resize(_) | Handler::Change(_) | Handler::ListItem(_) => {
                             println!("warning: on_click expects an Event (Ctx::set_state)")
                         }
                     }
@@ -470,8 +523,16 @@ impl AppState {
                 parent.add_subview(&label);
                 Widget::Label(label)
             }
-            ElementType::List(data) => {
-                let list_view = ListView::with(ReactiveListView::new(data));
+            ElementType::List => {
+                // Snapshot the rows NOW, against current state: AppKit pulls
+                // rows from the delegate whenever it likes (including
+                // mid-render), so it must serve from a snapshot, not from
+                // state. Row count comes from the `rows(n)` prop.
+                let delegate = ReactiveListView::with(
+                    self.app_weak.clone(),
+                    self.snapshot_rows(el),
+                );
+                let list_view = ListView::with(delegate);
                 parent.add_subview(&list_view);
                 Widget::List(list_view)
             }
@@ -791,6 +852,18 @@ impl AppState {
                 }
             }
 
+            (Widget::List(control), ElementType::List) => {
+                // Rows are render outputs: refresh the snapshot wholesale.
+                // Deliberately NOT calling reload() here — it would fire
+                // item_for mid-render while the state borrow is held; the
+                // post-render reload_lists() pass does it with the borrow
+                // released.
+                let rows = self.snapshot_rows(new_el);
+                if let Some(delegate) = control.delegate.as_ref() {
+                    *delegate.rows.borrow_mut() = rows;
+                }
+            }
+
             // incompatible: unmount the old subtree (it drops, its views
             // remove themselves) and mount the new element fresh
             (widget, _) => {
@@ -978,8 +1051,11 @@ impl<M> AppDelegate for ReactApp<M> {
         }
 
         // render before show, so a content-hugging window is born at the right
-        // size instead of resizing in view
+        // size instead of resizing in view. The reload pass makes AppKit
+        // re-query any lists after the render borrow is released (their
+        // item_for may have been skipped mid-render).
         self.state.borrow_mut().render();
+        self.state.borrow().reload_lists();
 
         self.state.borrow().window.show();
 
@@ -1013,22 +1089,30 @@ impl<M: Send + Sync + 'static> Dispatcher for ReactApp<M> {
     /// run the app's handler with &State, then re-render — the tree picks
     /// them up like any other state.
     fn on_ui_message(&self, message: Message<M>) {
-        let mut app = self.state.borrow_mut();
-
+        // Each arm: run the handler and render under the borrow, then RELEASE
+        // the borrow before reload_lists — item_for must find it free.
         match message {
             Message::Event(id) => {
-                let handler = app.handlers_by_id.borrow().get(&id).cloned();
+                let handler = self.state.borrow().handlers_by_id.borrow().get(&id).cloned();
                 match handler {
                     Some(handler) => {
-                        handler.fire(&app.state);
-                        app.render();
+                        {
+                            let mut app = self.state.borrow_mut();
+                            handler.fire(&app.state);
+                            app.render();
+                        }
+                        self.state.borrow().reload_lists();
                     }
                     None => println!("warning: no event #{} — stale dispatch?", id),
                 }
             }
             Message::App(msg) => {
-                (self.on_app_message)(&app.state, msg);
-                app.render();
+                {
+                    let mut app = self.state.borrow_mut();
+                    (self.on_app_message)(&app.state, msg);
+                    app.render();
+                }
+                self.state.borrow().reload_lists();
             }
         }
     }
@@ -1049,6 +1133,19 @@ fn widget_at_path<'a>(widget: &'a Widget, path: &[usize]) -> Option<&'a Widget> 
         current = children.get(*index)?;
     }
     Some(current)
+}
+
+/// Walks the widget tree asking every list to reload (see AppState::reload_lists).
+fn reload_lists_in(widget: &Widget) {
+    match widget {
+        Widget::List(control) => control.reload(),
+        Widget::Container { children, .. } => {
+            for child in children {
+                reload_lists_in(child);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Finds the position of the focused input in the widget tree. While
@@ -1139,6 +1236,7 @@ fn debug_dump(el: &Element, widget: &Widget, depth: usize) {
         Widget::Label(label) => label.objc.get(|obj| unsafe { msg_send![obj, frame] }),
         Widget::Input(field) => field.objc.get(|obj| unsafe { msg_send![obj, frame] }),
         Widget::ImageView { view, .. } => view.objc.get(|obj| unsafe { msg_send![obj, frame] }),
+        Widget::List(control) => control.objc.get(|obj| unsafe { msg_send![obj, frame] }),
     };
     println!(
         "{indent}{:?}: ({:.0}, {:.0}) {:.0} x {:.0}",

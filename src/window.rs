@@ -71,6 +71,10 @@ impl WindowDelegate for WindowProxy {
                 println!("warning: on_resize expects |state, w, h|");
                 return;
             }
+            Some(Handler::ListItem(_)) => {
+                println!("warning: on_resize expects |state, w, h|");
+                return;
+            }
             Some(Handler::Change(_)) => {
                 println!("warning: on_resize expects |state, w, h|");
                 return;
@@ -91,6 +95,13 @@ impl WindowDelegate for WindowProxy {
         // and re-render: declaring on_resize is opting into "react to
         // resizes", so the tree updates live during a drag. The size write
         // above converges (request == actual → no-op), so this can't loop.
-        app.borrow_mut().render();
+        // Reload lists with the borrow released — item_for must find it free.
+        {
+            let mut app = app.borrow_mut();
+            app.render();
+        }
+        if let Ok(app) = app.try_borrow() {
+            app.reload_lists();
+        }
     }
 }
