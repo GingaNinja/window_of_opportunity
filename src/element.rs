@@ -52,6 +52,72 @@ pub fn window_spec(tree: &Element) -> WindowSpec {
     }
 }
 
+/// ui! macro for easily creating ui element trees. The return type is `Box<window_of_opportunity::element::Element>`
+///
+/// You can reference a custom component (which must implement `Component`)
+/// ```
+/// use window_of_opportunity::{
+/// element::Element,
+/// ui,
+/// };
+///
+/// #[derive(Debug)]
+/// struct CustomComponent {}
+///
+/// impl window_of_opportunity::component::Component for CustomComponent {
+///     fn render(&self, ctx: &window_of_opportunity::state::Ctx, mut children: Vec<Box<window_of_opportunity::element::Element>>) -> Box<window_of_opportunity::element::Element> {
+///         if children.is_empty() {
+///             ui! { Button {{ Text { "Click Me" }}}}
+///         } else {
+///             let child = children.remove(0);
+///             ui! {
+///                 Div { CHILDREN child }
+///             }
+///         }
+///         // note any children passed to the component are captured with the literal `CHILDREN` - one child at a time
+///     }
+/// }
+///
+/// let my_tree = ui! {
+///    Window width(400.) {
+///         {
+///             Div {
+///                 { CustomComponent }
+///             }
+///         }
+
+/// }};
+/// ```
+/// *Note* `width(400.)` is a prop. Other props shown below.
+///
+/// All elements apart from Text can have children. Children are a set of `{}` surrounded by an initial set of `{}`
+///
+/// Elements and their props:
+/// * Window
+///     * `title(string)`
+///     * `on_resize(|&State, w: f64, h: f64)`
+/// * Div
+///     * `direction(string - column/row)`
+/// * Button
+///     * `on_click(window_of_opportunity::state::Event)`
+/// * Input
+///     * `placeholder(string)`
+///     * `on_change(|&State, String|)`
+/// * Image
+/// * List
+///     * `rows(int)`
+///     * `on_display_item(|Ctx, usize| -> Box<window_of_opportunity::element::Element>)`
+/// * Text
+///     * `color(string)`
+///     * `font_size(int)`
+///
+/// In addition, there are generic props that can be applied to all elements:
+/// * `gap(f64)` for space between multiple siblings (not the beginning or end)
+/// * `height(f64)`
+/// * `width(f64)`
+/// * `padding(f64)`
+/// * `background(string)`
+///
 #[macro_export]
 macro_rules! ui {
     (Window $($val:tt) *) => {

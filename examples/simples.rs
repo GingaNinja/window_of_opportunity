@@ -61,8 +61,8 @@ impl Component for Pane {
                 }
             }
         } else {
-            let children = children.remove(0);
-            ui! { Div { CHILDREN children }}
+            let child = children.remove(0);
+            ui! { Div { CHILDREN child }}
         }
     }
 }
