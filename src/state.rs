@@ -10,6 +10,8 @@ use std::{
     rc::Rc,
 };
 
+use crate::element::Element;
+
 /// Component state lives in typed slots, keyed by name. Slots survive
 /// re-renders and full remounts — that's the whole point: `use_state` reads
 /// (or initializes) the same slot every render. Interior mutability means
@@ -64,6 +66,11 @@ pub enum Handler {
     Resize(ResizeHandler),
     /// Fn(&State, String) — wired by the input delegate
     Change(Rc<dyn Fn(&State, String)>),
+    /// Fn(&Ctx, usize) -> Box<Element> — called ONCE PER ROW AT RENDER TIME
+    /// (not at display time): the row elements it returns are snapshotted
+    /// into the list delegate, and AppKit serves rows from that snapshot.
+    /// See listview.rs — item_for must never touch state directly.
+    ListItem(DisplayListRowHandler),
 }
 
 impl Debug for Handler {
@@ -72,6 +79,7 @@ impl Debug for Handler {
             Handler::Simple(_) => f.write_str("<event>"),
             Handler::Resize(_) => f.write_str("<resize-handler>"),
             Handler::Change(_) => f.write_str("<change-handler>"),
+            Handler::ListItem(_) => f.write_str("<listItem-handler>"),
         }
     }
 }
@@ -79,6 +87,8 @@ impl Debug for Handler {
 /// An on_resize handler: |state, w, h| — runs against state on every
 /// resize tick with the new usable size, followed by a re-render.
 type ResizeHandler = Rc<dyn Fn(&State, f64, f64)>;
+
+type DisplayListRowHandler = Rc<dyn Fn(&Ctx, usize) -> Box<Element>>;
 
 /// An event: a closure that runs against &State on the main thread when fired,
 /// followed by a re-render. Never handed to AppKit directly — see

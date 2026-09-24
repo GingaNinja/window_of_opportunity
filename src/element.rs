@@ -21,6 +21,7 @@ pub enum ElementType {
     Text(String),
     Input,
     Image,
+    List,
     /// A component invocation, as a tree node — expanded by the framework
     /// during render with access to state. (Rc so the enum stays Clone-able.)
     Component(Rc<dyn Component>),
@@ -51,6 +52,72 @@ pub fn window_spec(tree: &Element) -> WindowSpec {
     }
 }
 
+/// ui! macro for easily creating ui element trees. The return type is `Box<window_of_opportunity::element::Element>`
+///
+/// You can reference a custom component (which must implement `Component`)
+/// ```
+/// use window_of_opportunity::{
+/// element::Element,
+/// ui,
+/// };
+///
+/// #[derive(Debug)]
+/// struct CustomComponent {}
+///
+/// impl window_of_opportunity::component::Component for CustomComponent {
+///     fn render(&self, ctx: &window_of_opportunity::state::Ctx, mut children: Vec<Box<window_of_opportunity::element::Element>>) -> Box<window_of_opportunity::element::Element> {
+///         if children.is_empty() {
+///             ui! { Button {{ Text { "Click Me" }}}}
+///         } else {
+///             let child = children.remove(0);
+///             ui! {
+///                 Div { CHILDREN child }
+///             }
+///         }
+///         // note any children passed to the component are captured with the literal `CHILDREN` - one child at a time
+///     }
+/// }
+///
+/// let my_tree = ui! {
+///    Window width(400.) {
+///         {
+///             Div {
+///                 { CustomComponent }
+///             }
+///         }
+
+/// }};
+/// ```
+/// *Note* `width(400.)` is a prop. Other props shown below.
+///
+/// All elements apart from Text can have children. Children are a set of `{}` surrounded by an initial set of `{}`
+///
+/// Elements and their props:
+/// * Window
+///     * `title(string)`
+///     * `on_resize(|&State, w: f64, h: f64)`
+/// * Div
+///     * `direction(string - column/row)`
+/// * Button
+///     * `on_click(window_of_opportunity::state::Event)`
+/// * Input
+///     * `placeholder(string)`
+///     * `on_change(|&State, String|)`
+/// * Image
+/// * List
+///     * `rows(int)`
+///     * `on_display_item(|Ctx, usize| -> Box<window_of_opportunity::element::Element>)`
+/// * Text
+///     * `color(string)`
+///     * `font_size(int)`
+///
+/// In addition, there are generic props that can be applied to all elements:
+/// * `gap(f64)` for space between multiple siblings (not the beginning or end)
+/// * `height(f64)`
+/// * `width(f64)`
+/// * `padding(f64)`
+/// * `background(string)`
+///
 #[macro_export]
 macro_rules! ui {
     (Window $($val:tt) *) => {
@@ -68,21 +135,48 @@ macro_rules! ui {
     (Image $($val:tt) *) => {
         ui! { @element Image $($val)* }
     };
-    (Text $contents:expr) => {
-        Box::new($crate::element::Element {
-            element_type: $crate::element::ElementType::Text($contents.into()),
-            props: HashMap::new(),
-            handlers: HashMap::new(),
-            children: vec![],
-        })
+    (List $($val:tt) *) => {
+        ui! { @element List $($val)* }
     };
-    (CHILDREN $comp:ident) => {
-        $comp
-    };
-    ($comp:ident $($val:tt) *) => {
+    // Text with props — content is BRACED, the same convention as children
+    // on the other elements: Text color("blue") font_size(10) { content }
+    // The braces are load-bearing: without them a call-shaped content
+    // (helper(x), item.clone()) is indistinguishable from one more prop at
+    // the ident/expr boundary, and rustc raises a local-ambiguity error.
+    // Props are RECORDED via @prop — same machinery as every other element
+    // — so they're available to rendering later; whether a label honors
+    // background/color is a separate, rendering-side task.
+    (Text $($prop:ident ($($val:tt)*))* { $contents:expr }) => {
         {
-            let children = vec![];
-            $( children = vec!(ui! $val ); )*
+            use std::collections::HashMap;
+            let mut el = $crate::element::Element {
+                element_type: $crate::element::ElementType::Text($contents.into()),
+                props: HashMap::new(),
+                handlers: HashMap::new(),
+                children: vec![],
+            };
+            $( ui!(@prop el, $prop ($($val)*)); )*
+            Box::new(el)
+        }
+    };
+    (Text $contents:expr) => {
+        {
+            use std::collections::HashMap;
+            Box::new($crate::element::Element {
+                element_type: $crate::element::ElementType::Text($contents.into()),
+                props: HashMap::new(),
+                handlers: HashMap::new(),
+                children: vec![],
+            })
+        }
+    };
+    (CHILDREN $expr:expr) => {
+        $expr
+    };
+    // A bare component invocation: a component with no children.
+    ($comp:ident) => {
+        {
+            use std::collections::HashMap;
             // A component invocation stays as a tree node — the framework
             // expands it with current state during render (see `expand`).
             // (Macro hygiene: the macro can't reference the caller's `state`
@@ -91,8 +185,22 @@ macro_rules! ui {
                 element_type: $crate::element::ElementType::Component(std::rc::Rc::new($comp {})),
                 props: HashMap::new(),
                 handlers: HashMap::new(),
-                children,
+                children: vec![],
             })
+        }
+    };
+    // A component invocation with children: TodoView { { Text "hi" } }
+    ($comp:ident { $($inner:tt)* }) => {
+        {
+            use std::collections::HashMap;
+            let mut el = $crate::element::Element {
+                element_type: $crate::element::ElementType::Component(std::rc::Rc::new($comp {})),
+                props: HashMap::new(),
+                handlers: HashMap::new(),
+                children: vec![],
+            };
+            ui!(@children el, $($inner)*);
+            Box::new(el)
         }
     };
     // element with props and a braced child list:
@@ -141,6 +249,10 @@ macro_rules! ui {
         $el.handlers
             .insert("on_change".to_string(), $crate::state::Handler::Change(std::rc::Rc::new(($($val)*))));
     };
+    (@prop $el:ident, on_display_item($($val:tt)*)) => {
+        $el.handlers
+            .insert("on_display_item".to_string(), $crate::state::Handler::ListItem(std::rc::Rc::new(($($val)*))));
+    };
     (@prop $el:ident, $prop:ident($($val:tt)*)) => {
         // Evaluate the value at tree-build time: literal props and computed
         // expressions (width(w)) both stringify their runtime value.
@@ -170,6 +282,22 @@ macro_rules! ui {
         $v.children.push(ui!($comp { $($inner)* }));
         ui!(@children $v, $($rest)*);
     };
+    // ---- expression children ----
+    // LAST arm, on purpose: anything that isn't an element, Text, the
+    // CHILDREN splice, a component invocation, or an internal @-rule is an
+    // expression evaluating to Box<Element>. So a match, an if, a function
+    // call, or a parenthesized prebuilt element works directly as a child:
+    //   { match flag { A => ui!{ Text "a" }, B => ui!{ Text "b" } } }
+    // (A *bare* identifier stays a component invocation — splice a binding
+    // instead with { CHILDREN my_element }.)
+    ($expr:expr) => {
+        {
+            // the annotation turns "expected struct Element, found i32" into
+            // an error pointing at the child expression itself
+            let child: Box<$crate::element::Element> = $expr;
+            child
+        }
+    };
 }
 
 /// Somewhere to hold some pixel data, to then add as src on an Image.
@@ -193,5 +321,59 @@ impl BlitFrame {
             pixels: Arc::new(Vec::new()),
             version: 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn helper(_x: usize) -> String {
+        "helper!".to_string()
+    }
+
+    #[test]
+    fn text_props_are_recorded_and_content_survives() {
+        let el = crate::ui! { Text background("blue") { "Complete".to_string() } };
+        assert_eq!(
+            el.props.get("background").map(String::as_str),
+            Some("blue"),
+            "prop must land in el.props"
+        );
+        assert!(
+            matches!(&el.element_type, ElementType::Text(t) if t == "Complete"),
+            "content must survive: {:?}",
+            el.element_type
+        );
+    }
+
+    #[test]
+    fn text_plain_content_forms() {
+        // literal, field access, macro call, plain call expression — the call
+        // form is the ambiguous one vs. prop syntax, and must read as content
+        let el = crate::ui! { Text "plain" };
+        assert!(matches!(&el.element_type, ElementType::Text(t) if t == "plain"));
+
+        let el = crate::ui! { Text helper(3) };
+        assert!(matches!(&el.element_type, ElementType::Text(t) if t == "helper!"));
+
+        let el = crate::ui! { Text format!("number: {}", 3) };
+        assert!(matches!(&el.element_type, ElementType::Text(t) if t == "number: 3"));
+
+        let item = String::from("field");
+        let el = crate::ui! { Text item.clone() };
+        assert!(matches!(&el.element_type, ElementType::Text(t) if t == "field"));
+        assert!(
+            el.props.is_empty(),
+            "no props on plain content: {:?}",
+            el.props
+        );
+
+        // multiple props + content: content goes in braces (see the macro
+        // arm — unbraced content after props is ambiguous and won't compile)
+        let el = crate::ui! { Text prop1(1) prop2(2) { item.clone() } };
+        assert!(matches!(&el.element_type, ElementType::Text(t) if t == "field"));
+        assert_eq!(el.props.get("prop1").map(String::as_str), Some("1"));
+        assert_eq!(el.props.get("prop2").map(String::as_str), Some("2"));
     }
 }

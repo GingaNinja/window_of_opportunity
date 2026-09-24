@@ -6,11 +6,11 @@ use std::{
 use cacao::{
     appkit::window::{Window, WindowDelegate},
     core_graphics::display::CGRect,
-    objc::{msg_send, runtime::Object, sel, sel_impl},
+    objc::{msg_send, sel, sel_impl},
 };
 
 use crate::{
-    app::{AppState, TITLEBAR_OFFSET},
+    app::AppState,
     state::Handler,
 };
 
@@ -44,16 +44,12 @@ impl WindowDelegate for WindowProxy {
                 return;
             };
 
-            // The content view's frame IS the content size; report the *usable*
-            // size (content minus the title-bar offset), matching the semantics
-            // the width/height props have.
+            // contentLayoutRect is the usable rectangle below the title bar —
+            // exactly the content size the width/height props describe, so no
+            // hardcoded offset is involved.
             unsafe {
-                let content: *mut Object = msg_send![&*window.objc, contentView];
-                let frame: CGRect = msg_send![content, frame];
-                (
-                    frame.size.width,
-                    (frame.size.height - TITLEBAR_OFFSET).max(0.),
-                )
+                let layout: CGRect = msg_send![&*window.objc, contentLayoutRect];
+                (layout.size.width, layout.size.height)
             }
         };
 
@@ -68,6 +64,10 @@ impl WindowDelegate for WindowProxy {
         let handler = match handler {
             Some(Handler::Resize(handler)) => handler,
             Some(Handler::Simple(_)) => {
+                println!("warning: on_resize expects |state, w, h|");
+                return;
+            }
+            Some(Handler::ListItem(_)) => {
                 println!("warning: on_resize expects |state, w, h|");
                 return;
             }
@@ -91,6 +91,13 @@ impl WindowDelegate for WindowProxy {
         // and re-render: declaring on_resize is opting into "react to
         // resizes", so the tree updates live during a drag. The size write
         // above converges (request == actual → no-op), so this can't loop.
-        app.borrow_mut().render();
+        // Reload lists with the borrow released — item_for must find it free.
+        {
+            let mut app = app.borrow_mut();
+            app.render();
+        }
+        if let Ok(app) = app.try_borrow() {
+            app.reload_lists();
+        }
     }
 }
