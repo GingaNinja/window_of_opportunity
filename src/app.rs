@@ -15,7 +15,7 @@ use cacao::{
     },
     button::Button,
     color::Color,
-    core_graphics::display::CGSize,
+    core_graphics::display::{CGRect, CGSize},
     foundation::{NSString, nil},
     image::ImageView,
     input::TextField,
@@ -23,7 +23,7 @@ use cacao::{
     listview::ListView,
     notification_center::Dispatcher,
     objc::{class, msg_send, runtime::Object, sel, sel_impl},
-    text::Label,
+    text::{Font, Label},
     view::View,
 };
 
@@ -37,11 +37,6 @@ use crate::{
     widgets::{Widget, compatible, flex_changed},
     window::WindowProxy,
 };
-
-/// Height of the window's title-bar area. With `FullSizeContentView` the content
-/// view starts underneath it, so the root is offset by this amount — exactly once,
-/// at the root pin.
-pub const TITLEBAR_OFFSET: f64 = 46.;
 
 /// Application should automatically know what system it's running on, and so instantiate the correct windowing library.
 /// For now, this is just cacao (TODO - add win32 and a testing harness)
@@ -247,6 +242,10 @@ impl AppState {
             }
         }
 
+        // Measured once per render: the real title-bar height (not a
+        // hardcoded constant) feeds the root pin and the size math below.
+        let inset = self.titlebar_inset();
+
         // The root always starts top-left, below the title bar. A specified
         // axis is pinned to the window — the window drives the layout. An
         // unspecified axis is left unpinned so the content drives it, and
@@ -260,7 +259,7 @@ impl AppState {
                 pins.push(
                     view.top
                         .constraint_equal_to(&self.content.top)
-                        .offset(TITLEBAR_OFFSET),
+                        .offset(inset),
                 );
                 pins.push(view.leading.constraint_equal_to(&self.content.leading));
                 if spec.width.is_some() {
@@ -279,7 +278,7 @@ impl AppState {
         // fittingSize is the smallest size that satisfies the constraint
         // system — for an unpinned axis that's the content's natural size.
         let mut content_w = spec.width;
-        let mut content_h = spec.height.map(|h| h + TITLEBAR_OFFSET);
+        let mut content_h = spec.height.map(|h| h + inset);
         if content_w.is_none() || content_h.is_none() {
             let fit: CGSize = self
                 .content
@@ -388,6 +387,21 @@ impl AppState {
         reload_lists_in(root);
     }
 
+    /// Height of the title-bar strip the content view runs under. Windows are
+    /// `FullSizeContentView`, so the content view spans the whole frame and
+    /// the root must be pushed down by exactly this much. Measured via
+    /// `contentLayoutRect` (the usable rectangle below the title bar) rather
+    /// than hardcoded — the real height varies with macOS version, toolbars
+    /// and accessibility settings.
+    fn titlebar_inset(&self) -> f64 {
+        unsafe {
+            let content: *mut Object = msg_send![&*self.window.objc, contentView];
+            let bounds: CGRect = msg_send![content, bounds];
+            let layout: CGRect = msg_send![&*self.window.objc, contentLayoutRect];
+            (bounds.size.height - layout.size.height).max(0.)
+        }
+    }
+
     /// Focus snapshot before reconciling: the focused input's position, plus
     /// the field's objc pointer — so restoration can tell a *replaced* field
     /// (restore focus, cursor to end) from a *survived* one (do nothing; its
@@ -468,7 +482,7 @@ impl AppState {
                 let view = View::default();
 
                 if let Some(bg) = el.props.get("background") {
-                    view.set_background_color(background_color(bg));
+                    view.set_background_color(color(bg));
                 }
 
                 parent.add_subview(&view);
@@ -520,6 +534,15 @@ impl AppState {
                 // A standalone Text mounts a Label — display text for state
                 let label = Label::new();
                 label.set_text(text);
+                if let Some(txt_color) = el.props.get("color") {
+                    label.set_text_color(color(txt_color));
+                }
+                if let Some(font_size) = el.props.get("font_size") {
+                    let font_size: f64 = font_size.parse().unwrap();
+                    let font = Font::system(font_size);
+                    label.set_font(font);
+                }
+
                 parent.add_subview(&label);
                 Widget::Label(label)
             }
@@ -528,10 +551,8 @@ impl AppState {
                 // rows from the delegate whenever it likes (including
                 // mid-render), so it must serve from a snapshot, not from
                 // state. Row count comes from the `rows(n)` prop.
-                let delegate = ReactiveListView::with(
-                    self.app_weak.clone(),
-                    self.snapshot_rows(el),
-                );
+                let delegate =
+                    ReactiveListView::with(self.app_weak.clone(), self.snapshot_rows(el));
                 let list_view = ListView::with(delegate);
                 parent.add_subview(&list_view);
                 Widget::List(list_view)
@@ -893,7 +914,7 @@ impl AppState {
         // reconcile the background prop (visual only)
         if old_el.props.get("background") != new_el.props.get("background") {
             if let Some(bg) = new_el.props.get("background") {
-                view.set_background_color(background_color(bg));
+                view.set_background_color(color(bg));
             }
         }
 
@@ -990,7 +1011,10 @@ impl<M: Send + Sync + 'static> ReactApp<M> {
                 100.,
                 100.,
                 spec.width.unwrap_or(1024.),
-                spec.height.map(|h| h + TITLEBAR_OFFSET).unwrap_or(768.),
+                // No title-bar math here — the window doesn't exist yet, so
+                // there's nothing to measure. The first render (before the
+                // window is shown) measures the real inset and corrects.
+                spec.height.unwrap_or(768.),
             );
         }
         let content = View::new();
@@ -1093,7 +1117,13 @@ impl<M: Send + Sync + 'static> Dispatcher for ReactApp<M> {
         // the borrow before reload_lists — item_for must find it free.
         match message {
             Message::Event(id) => {
-                let handler = self.state.borrow().handlers_by_id.borrow().get(&id).cloned();
+                let handler = self
+                    .state
+                    .borrow()
+                    .handlers_by_id
+                    .borrow()
+                    .get(&id)
+                    .cloned();
                 match handler {
                     Some(handler) => {
                         {
@@ -1188,7 +1218,7 @@ struct NSRange {
     length: usize,
 }
 
-fn background_color(name: &str) -> Color {
+fn color(name: &str) -> Color {
     match name {
         "blue" => Color::SystemBlue,
         "red" => Color::SystemRed,

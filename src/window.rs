@@ -6,11 +6,11 @@ use std::{
 use cacao::{
     appkit::window::{Window, WindowDelegate},
     core_graphics::display::CGRect,
-    objc::{msg_send, runtime::Object, sel, sel_impl},
+    objc::{msg_send, sel, sel_impl},
 };
 
 use crate::{
-    app::{AppState, TITLEBAR_OFFSET},
+    app::AppState,
     state::Handler,
 };
 
@@ -44,16 +44,12 @@ impl WindowDelegate for WindowProxy {
                 return;
             };
 
-            // The content view's frame IS the content size; report the *usable*
-            // size (content minus the title-bar offset), matching the semantics
-            // the width/height props have.
+            // contentLayoutRect is the usable rectangle below the title bar —
+            // exactly the content size the width/height props describe, so no
+            // hardcoded offset is involved.
             unsafe {
-                let content: *mut Object = msg_send![&*window.objc, contentView];
-                let frame: CGRect = msg_send![content, frame];
-                (
-                    frame.size.width,
-                    (frame.size.height - TITLEBAR_OFFSET).max(0.),
-                )
+                let layout: CGRect = msg_send![&*window.objc, contentLayoutRect];
+                (layout.size.width, layout.size.height)
             }
         };
 

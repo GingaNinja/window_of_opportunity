@@ -72,21 +72,45 @@ macro_rules! ui {
     (List $($val:tt) *) => {
         ui! { @element List $($val)* }
     };
-    (Text $contents:expr) => {
-        Box::new($crate::element::Element {
-            element_type: $crate::element::ElementType::Text($contents.into()),
-            props: HashMap::new(),
-            handlers: HashMap::new(),
-            children: vec![],
-        })
-    };
-    (CHILDREN $comp:ident) => {
-        $comp
-    };
-    ($comp:ident $($val:tt) *) => {
+    // Text with props — content is BRACED, the same convention as children
+    // on the other elements: Text color("blue") font_size(10) { content }
+    // The braces are load-bearing: without them a call-shaped content
+    // (helper(x), item.clone()) is indistinguishable from one more prop at
+    // the ident/expr boundary, and rustc raises a local-ambiguity error.
+    // Props are RECORDED via @prop — same machinery as every other element
+    // — so they're available to rendering later; whether a label honors
+    // background/color is a separate, rendering-side task.
+    (Text $($prop:ident ($($val:tt)*))* { $contents:expr }) => {
         {
-            let children = vec![];
-            $( children = vec!(ui! $val ); )*
+            use std::collections::HashMap;
+            let mut el = $crate::element::Element {
+                element_type: $crate::element::ElementType::Text($contents.into()),
+                props: HashMap::new(),
+                handlers: HashMap::new(),
+                children: vec![],
+            };
+            $( ui!(@prop el, $prop ($($val)*)); )*
+            Box::new(el)
+        }
+    };
+    (Text $contents:expr) => {
+        {
+            use std::collections::HashMap;
+            Box::new($crate::element::Element {
+                element_type: $crate::element::ElementType::Text($contents.into()),
+                props: HashMap::new(),
+                handlers: HashMap::new(),
+                children: vec![],
+            })
+        }
+    };
+    (CHILDREN $expr:expr) => {
+        $expr
+    };
+    // A bare component invocation: a component with no children.
+    ($comp:ident) => {
+        {
+            use std::collections::HashMap;
             // A component invocation stays as a tree node — the framework
             // expands it with current state during render (see `expand`).
             // (Macro hygiene: the macro can't reference the caller's `state`
@@ -95,8 +119,22 @@ macro_rules! ui {
                 element_type: $crate::element::ElementType::Component(std::rc::Rc::new($comp {})),
                 props: HashMap::new(),
                 handlers: HashMap::new(),
-                children,
+                children: vec![],
             })
+        }
+    };
+    // A component invocation with children: TodoView { { Text "hi" } }
+    ($comp:ident { $($inner:tt)* }) => {
+        {
+            use std::collections::HashMap;
+            let mut el = $crate::element::Element {
+                element_type: $crate::element::ElementType::Component(std::rc::Rc::new($comp {})),
+                props: HashMap::new(),
+                handlers: HashMap::new(),
+                children: vec![],
+            };
+            ui!(@children el, $($inner)*);
+            Box::new(el)
         }
     };
     // element with props and a braced child list:
@@ -178,6 +216,22 @@ macro_rules! ui {
         $v.children.push(ui!($comp { $($inner)* }));
         ui!(@children $v, $($rest)*);
     };
+    // ---- expression children ----
+    // LAST arm, on purpose: anything that isn't an element, Text, the
+    // CHILDREN splice, a component invocation, or an internal @-rule is an
+    // expression evaluating to Box<Element>. So a match, an if, a function
+    // call, or a parenthesized prebuilt element works directly as a child:
+    //   { match flag { A => ui!{ Text "a" }, B => ui!{ Text "b" } } }
+    // (A *bare* identifier stays a component invocation — splice a binding
+    // instead with { CHILDREN my_element }.)
+    ($expr:expr) => {
+        {
+            // the annotation turns "expected struct Element, found i32" into
+            // an error pointing at the child expression itself
+            let child: Box<$crate::element::Element> = $expr;
+            child
+        }
+    };
 }
 
 /// Somewhere to hold some pixel data, to then add as src on an Image.
@@ -201,5 +255,59 @@ impl BlitFrame {
             pixels: Arc::new(Vec::new()),
             version: 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn helper(_x: usize) -> String {
+        "helper!".to_string()
+    }
+
+    #[test]
+    fn text_props_are_recorded_and_content_survives() {
+        let el = crate::ui! { Text background("blue") { "Complete".to_string() } };
+        assert_eq!(
+            el.props.get("background").map(String::as_str),
+            Some("blue"),
+            "prop must land in el.props"
+        );
+        assert!(
+            matches!(&el.element_type, ElementType::Text(t) if t == "Complete"),
+            "content must survive: {:?}",
+            el.element_type
+        );
+    }
+
+    #[test]
+    fn text_plain_content_forms() {
+        // literal, field access, macro call, plain call expression — the call
+        // form is the ambiguous one vs. prop syntax, and must read as content
+        let el = crate::ui! { Text "plain" };
+        assert!(matches!(&el.element_type, ElementType::Text(t) if t == "plain"));
+
+        let el = crate::ui! { Text helper(3) };
+        assert!(matches!(&el.element_type, ElementType::Text(t) if t == "helper!"));
+
+        let el = crate::ui! { Text format!("number: {}", 3) };
+        assert!(matches!(&el.element_type, ElementType::Text(t) if t == "number: 3"));
+
+        let item = String::from("field");
+        let el = crate::ui! { Text item.clone() };
+        assert!(matches!(&el.element_type, ElementType::Text(t) if t == "field"));
+        assert!(
+            el.props.is_empty(),
+            "no props on plain content: {:?}",
+            el.props
+        );
+
+        // multiple props + content: content goes in braces (see the macro
+        // arm — unbraced content after props is ambiguous and won't compile)
+        let el = crate::ui! { Text prop1(1) prop2(2) { item.clone() } };
+        assert!(matches!(&el.element_type, ElementType::Text(t) if t == "field"));
+        assert_eq!(el.props.get("prop1").map(String::as_str), Some("1"));
+        assert_eq!(el.props.get("prop2").map(String::as_str), Some("2"));
     }
 }
