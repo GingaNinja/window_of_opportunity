@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/GingaNinja/window_of_opportunity/compare/v0.2.0...v0.3.0) - 2026-09-24
+
+### Added
+
+- add props (color and font_size) to the Text element
+- add List element with ability to create custom views for rows
+
+### Fixed
+
+- add some docs for the ui! macro
+
+### Other
+
+- update readme with latest status and a simple example
+- send data to list, and display one column
+- add a hard-coded listview
+- improve readme
+
 ## [0.2.0](https://github.com/GingaNinja/window_of_opportunity/compare/v0.1.2...v0.2.0) - 2026-09-17
 
 ### Added
