@@ -29,7 +29,7 @@ use cacao::{
 
 use crate::{
     component::Component,
-    element::{BlitFrame, Element, ElementType, window_spec},
+    element::{BlitFrame, Element, ElementType, PropType, window_spec},
     input::InputDelegate,
     layout::{Direction, FlexStyle},
     listview::ReactiveListView,
@@ -339,11 +339,7 @@ impl AppState {
     /// per render (mount or patch), never at display time. Count comes from
     /// the `rows(n)` prop; the handler from `on_display_item`.
     fn snapshot_rows(&self, el: &Element) -> Vec<Box<Element>> {
-        let count: usize = el
-            .props
-            .get("rows")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0);
+        let count: usize = el.props.get_usize(PropType::Rows).unwrap_or_default();
         let ctx = Ctx { state: &self.state };
         match el.handlers.get("on_display_item") {
             Some(Handler::ListItem(handler)) => (0..count).map(|i| handler(&ctx, i)).collect(),
@@ -481,7 +477,7 @@ impl AppState {
             ElementType::Window | ElementType::Div => {
                 let view = View::default();
 
-                if let Some(bg) = el.props.get("background") {
+                if let Some(bg) = el.props.get_string(PropType::Background) {
                     view.set_background_color(color(bg));
                 }
 
@@ -534,11 +530,10 @@ impl AppState {
                 // A standalone Text mounts a Label — display text for state
                 let label = Label::new();
                 label.set_text(text);
-                if let Some(txt_color) = el.props.get("color") {
+                if let Some(txt_color) = el.props.get_string(PropType::Color) {
                     label.set_text_color(color(txt_color));
                 }
-                if let Some(font_size) = el.props.get("font_size") {
-                    let font_size: f64 = font_size.parse().unwrap();
+                if let Some(font_size) = el.props.get_float(PropType::FontSize) {
                     let font = Font::system(font_size);
                     label.set_font(font);
                 }
@@ -564,10 +559,10 @@ impl AppState {
                 };
                 let field = TextField::with(delegate);
 
-                if let Some(value) = el.props.get("value") {
+                if let Some(value) = el.props.get_string(PropType::Value) {
                     field.set_text(value);
                 }
-                if let Some(placeholder) = el.props.get("placeholder") {
+                if let Some(placeholder) = el.props.get_string(PropType::Placeholder) {
                     field.set_placeholder_text(placeholder);
                 }
 
@@ -584,7 +579,7 @@ impl AppState {
 
                 // display whatever the src slot currently holds
                 let mut version = 0;
-                if let Some(src_key) = el.props.get("src") {
+                if let Some(src_key) = el.props.get_string(PropType::Source) {
                     let frame = self.state.use_state::<BlitFrame>(src_key, BlitFrame::empty);
                     if frame.version > 0 {
                         set_frame(&view, &frame);
@@ -838,15 +833,19 @@ impl AppState {
             (Widget::Input(field), ElementType::Input) => {
                 // controlled value: write only what actually differs — a
                 // reused field's cursor must never move
-                if old_el.props.get("value") != new_el.props.get("value") {
-                    if let Some(value) = new_el.props.get("value") {
+                if old_el.props.get_string(PropType::Value)
+                    != new_el.props.get_string(PropType::Value)
+                {
+                    if let Some(value) = new_el.props.get_string(PropType::Value) {
                         if field.get_value() != *value {
                             field.set_text(value);
                         }
                     }
                 }
-                if old_el.props.get("placeholder") != new_el.props.get("placeholder") {
-                    if let Some(placeholder) = new_el.props.get("placeholder") {
+                if old_el.props.get_string(PropType::Placeholder)
+                    != new_el.props.get_string(PropType::Placeholder)
+                {
+                    if let Some(placeholder) = new_el.props.get_string(PropType::Placeholder) {
                         field.set_placeholder_text(placeholder);
                     }
                 }
@@ -859,12 +858,28 @@ impl AppState {
             (Widget::Label(label), ElementType::Text(text)) => {
                 // display-only: no cursor to protect, just refresh
                 label.set_text(text);
+                // reconcile the visual props too — they're applied at mount,
+                // and a state-driven color/font_size must follow state changes
+                if old_el.props.get_string(PropType::Color)
+                    != new_el.props.get_string(PropType::Color)
+                {
+                    if let Some(txt_color) = new_el.props.get_string(PropType::Color) {
+                        label.set_text_color(color(txt_color));
+                    }
+                }
+                if old_el.props.get_float(PropType::FontSize)
+                    != new_el.props.get_float(PropType::FontSize)
+                {
+                    if let Some(font_size) = new_el.props.get_float(PropType::FontSize) {
+                        label.set_font(Font::system(font_size));
+                    }
+                }
             }
 
             (Widget::ImageView { view, version }, ElementType::Image) => {
                 // re-blit only when a new frame arrived — the version check
                 // that makes idle renders free
-                if let Some(src_key) = new_el.props.get("src") {
+                if let Some(src_key) = new_el.props.get_string(PropType::Source) {
                     let frame = self.state.use_state::<BlitFrame>(src_key, BlitFrame::empty);
                     if frame.version != *version {
                         set_frame(view, &frame);
@@ -912,8 +927,10 @@ impl AppState {
         };
 
         // reconcile the background prop (visual only)
-        if old_el.props.get("background") != new_el.props.get("background") {
-            if let Some(bg) = new_el.props.get("background") {
+        if old_el.props.get_string(PropType::Background)
+            != new_el.props.get_string(PropType::Background)
+        {
+            if let Some(bg) = new_el.props.get_string(PropType::Background) {
                 view.set_background_color(color(bg));
             }
         }

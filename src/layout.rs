@@ -1,8 +1,7 @@
 // ---------------------------------------------------------------------------
 // Flex vocabulary
 // ---------------------------------------------------------------------------
-
-use std::collections::HashMap;
+use crate::element::{PropType, Props};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Direction {
@@ -31,19 +30,17 @@ impl Default for Direction {
 }
 
 impl FlexStyle {
-    pub fn from_props(props: &HashMap<String, String>) -> Self {
-        let num = |key: &str| props.get(key).and_then(|value| value.parse().ok());
-
+    pub fn from_props(props: &Props) -> Self {
         FlexStyle {
-            direction: match props.get("direction").map(String::as_str) {
+            direction: match props.get_string(PropType::Direction) {
                 Some("row") => Direction::Row,
                 _ => Direction::Column,
             },
-            gap: num("gap").unwrap_or(0.),
-            padding: num("padding").unwrap_or(0.),
-            width: num("width"),
-            height: num("height"),
-            grow: props.get("grow").map(|v| v == "true").unwrap_or(false),
+            gap: props.get_float(PropType::Gap).unwrap_or_default(),
+            padding: props.get_float(PropType::Padding).unwrap_or_default(),
+            width: props.get_float(PropType::Width),
+            height: props.get_float(PropType::Height),
+            grow: props.get_bool(PropType::Grow).unwrap_or_default(),
         }
     }
 }

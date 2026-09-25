@@ -44,7 +44,7 @@ impl Component for Pane {
         if children.is_empty() {
             ui! { Div {
                     { Button on_click(switch)  {{ Text text.to_string()}}}
-                    { List rows(2) on_display_item(|ctx, row| {
+                    { List rows(2usize) on_display_item(|ctx, row| {
                         // rows are element trees like any other — styled with
                         // the same props. This one reads state (the Pane's
                         // `first` slot), so toggling the button re-rows the list.
