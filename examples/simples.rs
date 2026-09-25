@@ -2,8 +2,10 @@ use window_of_opportunity::{app::Application, component::Component, ui};
 
 /// A component with its own state: the count lives in a keyed slot that
 /// survives re-renders and full remounts — this is the hooks model.
-#[derive(Debug)]
-struct Counter {}
+#[derive(Debug, Default)]
+struct Counter {
+    thing: String,
+}
 
 impl Component for Counter {
     fn render(
@@ -20,7 +22,7 @@ impl Component for Counter {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Pane {}
 
 impl Component for Pane {
@@ -71,7 +73,7 @@ impl Component for Pane {
 /// slot; every keystroke runs on_change → state → full re-render (and a
 /// full remount — Phase 1: the field is destroyed per keystroke, and only
 /// positional focus restoration keeps typing alive).
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Typing {}
 
 impl Component for Typing {
@@ -92,7 +94,7 @@ impl Component for Typing {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Window {}
 
 impl Component for Window {
@@ -120,7 +122,7 @@ impl Component for Window {
                         { Button { Text "Two" } }
                         { Div width(80.) background("red") {} }
                     } }
-                    { Counter }
+                    { Counter thing("blah".into())} // a prop into counter
                     { Typing }
                     { Div height(40.) background("green") {} } // grow(true) here would be 0 tall: nothing to absorb in hug mode
                 } }

@@ -132,7 +132,7 @@ impl Props {
 /// ui,
 /// };
 ///
-/// #[derive(Debug)]
+/// #[derive(Debug, Default)]
 /// struct CustomComponent {}
 ///
 /// impl window_of_opportunity::component::Component for CustomComponent {
@@ -232,6 +232,7 @@ macro_rules! ui {
     };
     (Text $contents:expr) => {
         {
+            use std::collections::HashMap;
             Box::new($crate::element::Element {
                 element_type: $crate::element::ElementType::Text($contents.into()),
                 props: $crate::element::Props::new(),
@@ -244,6 +245,10 @@ macro_rules! ui {
         $expr
     };
     // A bare component invocation: a component with no children.
+    // Components are constructed via `Default` + field assignment (see the
+    // props arms below): `Default` goes on the component STRUCT — it can't
+    // be a `Component` supertrait, because `Default` isn't object-safe and
+    // `ElementType::Component` holds `Rc<dyn Component>`.
     ($comp:ident) => {
         {
             use std::collections::HashMap;
@@ -252,7 +257,7 @@ macro_rules! ui {
             // (Macro hygiene: the macro can't reference the caller's `state`
             // directly, so expansion happens outside the macro.)
             Box::new($crate::element::Element {
-                element_type: $crate::element::ElementType::Component(std::rc::Rc::new($comp {})),
+                element_type: $crate::element::ElementType::Component(std::rc::Rc::new($comp::default())),
                 props: $crate::element::Props::new(),
                 handlers: HashMap::new(),
                 children: vec![],
@@ -264,13 +269,49 @@ macro_rules! ui {
         {
             use std::collections::HashMap;
             let mut el = $crate::element::Element {
-                element_type: $crate::element::ElementType::Component(std::rc::Rc::new($comp {})),
+                element_type: $crate::element::ElementType::Component(std::rc::Rc::new($comp::default())),
                 props: $crate::element::Props::new(),
                 handlers: HashMap::new(),
                 children: vec![],
             };
             ui!(@children el, $($inner)*);
             Box::new(el)
+        }
+    };
+    // A component invocation with props and children:
+    //   TodoView title("hi") count(3) { { Text "x" } }
+    // Prop names are FIELD names; values are arbitrary expressions moved
+    // into the fields (custom types welcome — no cloning, no erasure).
+    // Fields must be visible at the call site (pub, or same module), and
+    // unspecified fields keep their `Default` — hand-write `Default` if a
+    // field's type doesn't implement it.
+    ($comp:ident $($field:ident ($($val:tt)*))+ { $($inner:tt)* }) => {
+        {
+            use std::collections::HashMap;
+            let mut comp = $comp::default();
+            $( comp.$field = ($($val)*); )*
+            let mut el = $crate::element::Element {
+                element_type: $crate::element::ElementType::Component(std::rc::Rc::new(comp)),
+                props: $crate::element::Props::new(),
+                handlers: HashMap::new(),
+                children: vec![],
+            };
+            ui!(@children el, $($inner)*);
+            Box::new(el)
+        }
+    };
+    // A component invocation with props, no children: TodoView count(3)
+    ($comp:ident $($field:ident ($($val:tt)*))+) => {
+        {
+            use std::collections::HashMap;
+            let mut comp = $comp::default();
+            $( comp.$field = ($($val)*); )*
+            Box::new($crate::element::Element {
+                element_type: $crate::element::ElementType::Component(std::rc::Rc::new(comp)),
+                props: $crate::element::Props::new(),
+                handlers: HashMap::new(),
+                children: vec![],
+            })
         }
     };
     // element with props and a braced child list:
@@ -524,5 +565,62 @@ mod typed_prop_tests {
             el.props.get_bool(crate::element::PropType::Resizable),
             Some(false)
         );
+    }
+}
+
+// (component props: custom types, partial props, hand-written Default)
+#[cfg(test)]
+mod component_prop_tests {
+    use crate::component::Component;
+
+    #[derive(Debug)]
+    struct Tag(&'static str); // deliberately NOT Default
+
+    #[derive(Debug)]
+    struct Fancy {
+        tag: Tag,
+        count: usize,
+        label: String,
+    }
+
+    // hand-written Default: fields with non-Default types are fine as long as
+    // this constructor supplies them
+    impl Default for Fancy {
+        fn default() -> Self {
+            Self {
+                tag: Tag("none"),
+                count: 0,
+                label: String::new(),
+            }
+        }
+    }
+
+    impl Component for Fancy {
+        fn render(
+            &self,
+            _ctx: &crate::state::Ctx,
+            _children: Vec<Box<crate::element::Element>>,
+        ) -> Box<crate::element::Element> {
+            crate::ui! { Text self.label.clone() }
+        }
+    }
+
+    #[test]
+    fn component_props_are_fields_with_custom_types() {
+        // partial props: count set, label keeps its Default
+        let el = crate::ui! { Fancy tag(Tag("hi")) count(2) };
+        let debug = format!("{:?}", el.element_type);
+        assert!(debug.contains("hi"), "custom type landed: {debug}");
+        assert!(debug.contains("count: 2"), "primitive landed: {debug}");
+        assert!(debug.contains("label: \"\""), "unset field kept Default: {debug}");
+
+        // bare usage goes through Default too
+        let el = crate::ui! { Fancy };
+        let debug = format!("{:?}", el.element_type);
+        assert!(debug.contains("tag: Tag(\"none\")"), "bare = Default: {debug}");
+
+        // props + children both
+        let el = crate::ui! { Fancy count(7) { { crate::ui! { Text "child" } } } };
+        assert_eq!(el.children.len(), 1);
     }
 }

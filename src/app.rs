@@ -68,7 +68,7 @@ impl Application {
     /// }
     ///
     /// # // MainWindow is our custom component with a `render` function.
-    /// # #[derive(Debug)]
+    /// # #[derive(Debug, Default)]
     /// # struct MainWindow {}
     ///
     /// # impl Component for MainWindow {
@@ -118,7 +118,7 @@ impl Application {
     /// #     state::Ctx,
     /// #     ui,
     /// # };
-    /// # #[derive(Debug)]
+    /// # #[derive(Debug, Default)]
     /// # struct Window {}
     /// #
     /// # impl Component for Window {
