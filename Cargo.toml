@@ -5,6 +5,7 @@ edition = "2024"
 authors = ["Dave Arkell dave@arkells.net"]
 description = "window_of_opportunity is attempting to make a native react style library"
 license = "MIT OR Apache-2.0"
+categories = ["GUI"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
