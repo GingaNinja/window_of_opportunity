@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/GingaNinja/window_of_opportunity/compare/v0.3.0...v0.3.1) - 2026-09-25
+
+### Fixed
+
+- add custom props to custom components
+- use typed props internally
+
+### Other
+
+- updated README and examples. Todos now adds a hard-coded todo on click
+
 ## [0.3.0](https://github.com/GingaNinja/window_of_opportunity/compare/v0.2.0...v0.3.0) - 2026-09-24
 
 ### Added
