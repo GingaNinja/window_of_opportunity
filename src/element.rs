@@ -5,7 +5,7 @@ use crate::{component::Component, state::Handler};
 #[derive(Debug, Clone)]
 pub struct Element {
     pub element_type: ElementType,
-    pub props: HashMap<String, String>,
+    pub props: Props,
     /// events attached to this element, by prop name (on_click, on_resize).
     /// Rc-cloned into the tree each render — cheap, and stale copies are
     /// harmless (they address state slots by key).
@@ -38,17 +38,88 @@ pub struct WindowSpec {
 }
 
 pub fn window_spec(tree: &Element) -> WindowSpec {
-    let num = |key: &str| tree.props.get(key).and_then(|value| value.parse().ok());
-
     WindowSpec {
-        width: num("width"),
-        height: num("height"),
-        title: tree.props.get("title").unwrap_or(&"".to_string()).clone(),
-        resizable: tree
+        width: tree.props.get_float(PropType::Width),
+        height: tree.props.get_float(PropType::Height),
+        title: tree
             .props
-            .get("resizable")
-            .map(|v| v != "false")
-            .unwrap_or(true),
+            .get_string(PropType::Title)
+            .unwrap_or_default()
+            .to_string(),
+        resizable: tree.props.get_bool(PropType::Resizable).unwrap_or(true),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Prop {
+    Float(f64),
+    Usize(usize),
+    String(String),
+    Bool(bool),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
+pub enum PropType {
+    Width,
+    Height,
+    Title,
+    Resizable,
+    Background,
+    Rows,
+    Color,
+    FontSize,
+    Value,
+    Placeholder,
+    Source,
+    Direction,
+    Gap,
+    Padding,
+    Grow,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Props(HashMap<PropType, Prop>);
+
+impl Props {
+    pub fn new() -> Self {
+        Props::default()
+    }
+    pub fn insert(&mut self, prop_type: PropType, prop: Prop) {
+        self.0.insert(prop_type, prop);
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    pub fn get_string(&self, prop: PropType) -> Option<&str> {
+        if let Some(Prop::String(value)) = self.0.get(&prop) {
+            Some(value)
+        } else {
+            None
+        }
+    }
+    pub fn get(&self, prop: PropType) -> Option<&Prop> {
+        self.0.get(&prop)
+    }
+    pub fn get_usize(&self, prop: PropType) -> Option<usize> {
+        if let Some(Prop::Usize(val)) = self.0.get(&prop) {
+            Some(*val)
+        } else {
+            None
+        }
+    }
+    pub fn get_float(&self, prop: PropType) -> Option<f64> {
+        if let Some(Prop::Float(val)) = self.0.get(&prop) {
+            Some(*val)
+        } else {
+            None
+        }
+    }
+    pub fn get_bool(&self, prop: PropType) -> Option<bool> {
+        if let Some(Prop::Bool(val)) = self.0.get(&prop) {
+            Some(*val)
+        } else {
+            None
+        }
     }
 }
 
@@ -61,7 +132,7 @@ pub fn window_spec(tree: &Element) -> WindowSpec {
 /// ui,
 /// };
 ///
-/// #[derive(Debug)]
+/// #[derive(Debug, Default)]
 /// struct CustomComponent {}
 ///
 /// impl window_of_opportunity::component::Component for CustomComponent {
@@ -151,7 +222,7 @@ macro_rules! ui {
             use std::collections::HashMap;
             let mut el = $crate::element::Element {
                 element_type: $crate::element::ElementType::Text($contents.into()),
-                props: HashMap::new(),
+                props: $crate::element::Props::new(),
                 handlers: HashMap::new(),
                 children: vec![],
             };
@@ -164,7 +235,7 @@ macro_rules! ui {
             use std::collections::HashMap;
             Box::new($crate::element::Element {
                 element_type: $crate::element::ElementType::Text($contents.into()),
-                props: HashMap::new(),
+                props: $crate::element::Props::new(),
                 handlers: HashMap::new(),
                 children: vec![],
             })
@@ -174,6 +245,10 @@ macro_rules! ui {
         $expr
     };
     // A bare component invocation: a component with no children.
+    // Components are constructed via `Default` + field assignment (see the
+    // props arms below): `Default` goes on the component STRUCT — it can't
+    // be a `Component` supertrait, because `Default` isn't object-safe and
+    // `ElementType::Component` holds `Rc<dyn Component>`.
     ($comp:ident) => {
         {
             use std::collections::HashMap;
@@ -182,8 +257,8 @@ macro_rules! ui {
             // (Macro hygiene: the macro can't reference the caller's `state`
             // directly, so expansion happens outside the macro.)
             Box::new($crate::element::Element {
-                element_type: $crate::element::ElementType::Component(std::rc::Rc::new($comp {})),
-                props: HashMap::new(),
+                element_type: $crate::element::ElementType::Component(std::rc::Rc::new($comp::default())),
+                props: $crate::element::Props::new(),
                 handlers: HashMap::new(),
                 children: vec![],
             })
@@ -194,13 +269,49 @@ macro_rules! ui {
         {
             use std::collections::HashMap;
             let mut el = $crate::element::Element {
-                element_type: $crate::element::ElementType::Component(std::rc::Rc::new($comp {})),
-                props: HashMap::new(),
+                element_type: $crate::element::ElementType::Component(std::rc::Rc::new($comp::default())),
+                props: $crate::element::Props::new(),
                 handlers: HashMap::new(),
                 children: vec![],
             };
             ui!(@children el, $($inner)*);
             Box::new(el)
+        }
+    };
+    // A component invocation with props and children:
+    //   TodoView title("hi") count(3) { { Text "x" } }
+    // Prop names are FIELD names; values are arbitrary expressions moved
+    // into the fields (custom types welcome — no cloning, no erasure).
+    // Fields must be visible at the call site (pub, or same module), and
+    // unspecified fields keep their `Default` — hand-write `Default` if a
+    // field's type doesn't implement it.
+    ($comp:ident $($field:ident ($($val:tt)*))+ { $($inner:tt)* }) => {
+        {
+            use std::collections::HashMap;
+            let mut comp = $comp::default();
+            $( comp.$field = ($($val)*); )*
+            let mut el = $crate::element::Element {
+                element_type: $crate::element::ElementType::Component(std::rc::Rc::new(comp)),
+                props: $crate::element::Props::new(),
+                handlers: HashMap::new(),
+                children: vec![],
+            };
+            ui!(@children el, $($inner)*);
+            Box::new(el)
+        }
+    };
+    // A component invocation with props, no children: TodoView count(3)
+    ($comp:ident $($field:ident ($($val:tt)*))+) => {
+        {
+            use std::collections::HashMap;
+            let mut comp = $comp::default();
+            $( comp.$field = ($($val)*); )*
+            Box::new($crate::element::Element {
+                element_type: $crate::element::ElementType::Component(std::rc::Rc::new(comp)),
+                props: $crate::element::Props::new(),
+                handlers: HashMap::new(),
+                children: vec![],
+            })
         }
     };
     // element with props and a braced child list:
@@ -210,7 +321,7 @@ macro_rules! ui {
             use std::collections::HashMap;
             let mut el = $crate::element::Element {
                 element_type: $crate::element::ElementType::$el,
-                props: HashMap::new(),
+                props: $crate::element::Props::new(),
                 handlers: HashMap::new(),
                 children: vec![],
             };
@@ -225,7 +336,7 @@ macro_rules! ui {
             use std::collections::HashMap;
             let mut el = $crate::element::Element {
                 element_type: $crate::element::ElementType::$el,
-                props: HashMap::new(),
+                props: $crate::element::Props::new(),
                 handlers: HashMap::new(),
                 children: vec![],
             };
@@ -234,8 +345,9 @@ macro_rules! ui {
         }
     };
     // ---- prop parsing ----
-    // Handler props hold handler closures; everything else stringifies
-    // its runtime value into `props`.
+    // Handler props hold handler closures; every other prop is TYPED — each
+    // arm names its PropType and Prop variant, and `@type_prop` inserts the
+    // value (`.into()` type-checks at the call site).
     (@prop $el:ident, on_click($($val:tt)*)) => {
         $el.handlers.insert("on_click".to_string(), $crate::state::Handler::Simple(($($val)*)));
     };
@@ -253,11 +365,62 @@ macro_rules! ui {
         $el.handlers
             .insert("on_display_item".to_string(), $crate::state::Handler::ListItem(std::rc::Rc::new(($($val)*))));
     };
+    (@prop $el:ident, background($($val:tt)*)) => {
+        ui!(@type_prop $el Background String ($($val)*));
+    };
+    (@prop $el:ident, rows($($val:tt)*)) => {
+        ui!(@type_prop $el Rows Usize ($($val)*));
+    };
+    (@prop $el:ident, width($($val:tt)*)) => {
+        ui!(@type_prop $el Width Float ($($val)*));
+    };
+    (@prop $el:ident, height($($val:tt)*)) => {
+        ui!(@type_prop $el Height Float ($($val)*));
+    };
+    (@prop $el:ident, padding($($val:tt)*)) => {
+        ui!(@type_prop $el Padding Float ($($val)*));
+    };
+    (@prop $el:ident, grow($($val:tt)*)) => {
+        ui!(@type_prop $el Grow Bool ($($val)*));
+    };
+    (@prop $el:ident, resizable($($val:tt)*)) => {
+        ui!(@type_prop $el Resizable Bool ($($val)*));
+    };
+    (@prop $el:ident, src($($val:tt)*)) => {
+        ui!(@type_prop $el Source String ($($val)*));
+    };
+    (@prop $el:ident, gap($($val:tt)*)) => {
+        ui!(@type_prop $el Gap Float ($($val)*));
+    };
+    (@prop $el:ident, font_size($($val:tt)*)) => {
+        ui!(@type_prop $el FontSize Float ($($val)*));
+    };
+    (@prop $el:ident, direction($($val:tt)*)) => {
+        ui!(@type_prop $el Direction String ($($val)*));
+    };
+    (@prop $el:ident, value($($val:tt)*)) => {
+        ui!(@type_prop $el Value String ($($val)*));
+    };
+    (@prop $el:ident, placeholder($($val:tt)*)) => {
+        ui!(@type_prop $el Placeholder String ($($val)*));
+    };
+    (@prop $el:ident, title($($val:tt)*)) => {
+        ui!(@type_prop $el Title String ($($val)*));
+    };
+    (@prop $el:ident, color($($val:tt)*)) => {
+        ui!(@type_prop $el Color String ($($val)*));
+    };
+    // An unknown prop fails LOUDLY at the call site — with a message,
+    // not with a missing-variant error from inside this macro.
     (@prop $el:ident, $prop:ident($($val:tt)*)) => {
-        // Evaluate the value at tree-build time: literal props and computed
-        // expressions (width(w)) both stringify their runtime value.
-        $el.props
-            .insert(stringify!($prop).to_string(), format!("{}", ($($val)*)));
+        compile_error!(concat!(
+            "unknown prop `", stringify!($prop),
+            "` — known props: width, height, padding, gap, grow, direction, background, color, font_size, title, value, placeholder, src, resizable, rows",
+            " (handlers: on_click, on_resize, on_change, on_display_item)"
+        ));
+    };
+    (@type_prop $el:ident $prop:ident $prop_type:ident ($($val:tt)*)) => {
+        $el.props.insert($crate::element::PropType::$prop, $crate::element::Prop::$prop_type($($val.into())*));
     };
     // ---- child-list parsing ----
     // macro_rules can't know where one child ends and the next begins when
@@ -336,7 +499,7 @@ mod tests {
     fn text_props_are_recorded_and_content_survives() {
         let el = crate::ui! { Text background("blue") { "Complete".to_string() } };
         assert_eq!(
-            el.props.get("background").map(String::as_str),
+            el.props.get_string(PropType::Background),
             Some("blue"),
             "prop must land in el.props"
         );
@@ -371,9 +534,93 @@ mod tests {
 
         // multiple props + content: content goes in braces (see the macro
         // arm — unbraced content after props is ambiguous and won't compile)
-        let el = crate::ui! { Text prop1(1) prop2(2) { item.clone() } };
+        let el = crate::ui! { Text width(1) height(2) { item.clone() } };
         assert!(matches!(&el.element_type, ElementType::Text(t) if t == "field"));
-        assert_eq!(el.props.get("prop1").map(String::as_str), Some("1"));
-        assert_eq!(el.props.get("prop2").map(String::as_str), Some("2"));
+        assert_eq!(el.props.get_float(PropType::Width), Some(1.));
+        assert_eq!(el.props.get_float(PropType::Height), Some(2.));
+    }
+}
+// (appended coverage for the typed-prop arms)
+#[cfg(test)]
+mod typed_prop_tests {
+    #[test]
+    fn every_framework_consumed_prop_has_an_arm() {
+        // these three props are read by layout/window_spec/Image mount —
+        // if a macro arm goes missing, this test fails to compile
+        let el = crate::ui! { Image src("slot") width(2.) };
+        assert_eq!(
+            el.props.get_string(crate::element::PropType::Source),
+            Some("slot")
+        );
+
+        let el = crate::ui! { Div grow(true) gap(4.) { { crate::ui! { Text "x" } } } };
+        assert_eq!(
+            el.props.get_bool(crate::element::PropType::Grow),
+            Some(true)
+        );
+        assert_eq!(el.props.get_float(crate::element::PropType::Gap), Some(4.));
+
+        let el = crate::ui! { Window width(400.) resizable(false) };
+        assert_eq!(
+            el.props.get_bool(crate::element::PropType::Resizable),
+            Some(false)
+        );
+    }
+}
+
+// (component props: custom types, partial props, hand-written Default)
+#[cfg(test)]
+mod component_prop_tests {
+    use crate::component::Component;
+
+    #[derive(Debug)]
+    struct Tag(&'static str); // deliberately NOT Default
+
+    #[derive(Debug)]
+    struct Fancy {
+        tag: Tag,
+        count: usize,
+        label: String,
+    }
+
+    // hand-written Default: fields with non-Default types are fine as long as
+    // this constructor supplies them
+    impl Default for Fancy {
+        fn default() -> Self {
+            Self {
+                tag: Tag("none"),
+                count: 0,
+                label: String::new(),
+            }
+        }
+    }
+
+    impl Component for Fancy {
+        fn render(
+            &self,
+            _ctx: &crate::state::Ctx,
+            _children: Vec<Box<crate::element::Element>>,
+        ) -> Box<crate::element::Element> {
+            crate::ui! { Text self.label.clone() }
+        }
+    }
+
+    #[test]
+    fn component_props_are_fields_with_custom_types() {
+        // partial props: count set, label keeps its Default
+        let el = crate::ui! { Fancy tag(Tag("hi")) count(2) };
+        let debug = format!("{:?}", el.element_type);
+        assert!(debug.contains("hi"), "custom type landed: {debug}");
+        assert!(debug.contains("count: 2"), "primitive landed: {debug}");
+        assert!(debug.contains("label: \"\""), "unset field kept Default: {debug}");
+
+        // bare usage goes through Default too
+        let el = crate::ui! { Fancy };
+        let debug = format!("{:?}", el.element_type);
+        assert!(debug.contains("tag: Tag(\"none\")"), "bare = Default: {debug}");
+
+        // props + children both
+        let el = crate::ui! { Fancy count(7) { { crate::ui! { Text "child" } } } };
+        assert_eq!(el.children.len(), 1);
     }
 }

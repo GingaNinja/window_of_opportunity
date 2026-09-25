@@ -1,13 +1,13 @@
 # Window_of_opportunity
 
-A massively under-developed WIP, aiming to implement a react style library for creating native (as in, using the actual OS primitives) GUIs. 
+A WIP, aiming to implement a react style library for creating native (as in, using the actual OS primitives) GUIs. 
 
 Currently targetting Macos with AppKit (using Cacao under the hood), but wanting to add some win32 waiting in the sidelines.
 
 ## Features
 
 * Input boxes support internationalization because they are the native input boxes.
-* Small binaries - currently the library is less than 2k lines, plus a dependency on Cacao.
+* Small binaries - the todos example compiles to 1.3Mb in release.
 
 ## Getting started
 
@@ -16,7 +16,7 @@ The simplest possible app would look like this:
 ```rust
 use window_of_opportunity::{app::Application, component::Component, ui};
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Window {}
 impl Component for Window {
     fn render(

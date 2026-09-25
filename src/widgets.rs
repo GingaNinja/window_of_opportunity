@@ -13,7 +13,7 @@ use cacao::{
 };
 
 use crate::{
-    element::{Element, ElementType},
+    element::{Element, ElementType, PropType},
     input::InputDelegate,
     listview::ReactiveListView,
 };
@@ -113,7 +113,14 @@ impl Widget {
 
 /// The props that feed constraint generation — compared between old and new
 /// elements to decide whether a container (or its parent) needs relayout.
-const FLEX_PROPS: &[&str] = &["direction", "gap", "padding", "width", "height", "grow"];
+const FLEX_PROPS: &[PropType] = &[
+    PropType::Direction,
+    PropType::Gap,
+    PropType::Padding,
+    PropType::Width,
+    PropType::Height,
+    PropType::Grow,
+];
 
 pub fn flex_changed(old: &Element, new: &Element) -> bool {
     FLEX_PROPS
