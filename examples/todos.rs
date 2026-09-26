@@ -2,16 +2,53 @@ use std::{cell::RefCell, rc::Rc};
 
 use window_of_opportunity::{app::Application, component::Component, ui};
 
-#[derive(Clone)]
+use crate::TodoStatus::Incomplete;
+
+#[derive(Clone, Debug)]
 struct Todo {
     title: String,
     status: TodoStatus,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum TodoStatus {
     Complete,
     Incomplete,
+}
+
+#[derive(Debug)]
+struct TodoItem {
+    item: Todo,
+}
+
+impl Default for TodoItem {
+    fn default() -> Self {
+        Self {
+            item: Todo {
+                status: Incomplete,
+                title: "".into(),
+            },
+        }
+    }
+}
+
+impl Component for TodoItem {
+    fn render(
+        &self,
+        _ctx: &window_of_opportunity::state::Ctx,
+        _children: Vec<Box<window_of_opportunity::element::Element>>,
+    ) -> Box<window_of_opportunity::element::Element> {
+        ui! {
+            Div direction("column") {
+                { Text self.item.title.clone() }
+                // a `match` as a child — every arm returns an element
+                { match self.item.status {
+                    TodoStatus::Complete => ui! { Text color("blue") font_size(10.) { "Complete".to_string() } },
+                    TodoStatus::Incomplete => ui! { Text color("red") font_size(10.) { "Incomplete".to_string() } },
+                } }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -61,14 +98,7 @@ impl Component for TodoView {
                         rows[row].clone()
                     };
                     ui! {
-                        Div direction("column") {
-                            { Text item.title.clone() }
-                            // a `match` as a child — every arm returns an element
-                            { match item.status {
-                                TodoStatus::Complete => ui! { Text color("blue") font_size(10.) { "Complete".to_string() } },
-                                TodoStatus::Incomplete => ui! { Text color("red") font_size(10.) { "Incomplete".to_string() } },
-                            } }
-                        }
+                        TodoItem item(item)
                     }
                 })}
             }
