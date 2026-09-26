@@ -342,7 +342,13 @@ impl AppState {
         let count: usize = el.props.get_usize(PropType::Rows).unwrap_or_default();
         let ctx = Ctx { state: &self.state };
         match el.handlers.get("on_display_item") {
-            Some(Handler::ListItem(handler)) => (0..count).map(|i| handler(&ctx, i)).collect(),
+            Some(Handler::ListItem(handler)) => (0..count)
+                // Rows pass through `expand` here — component nodes must be
+                // inlined before mount (see the `unreachable!` in
+                // mount_element). Rows are the one pipeline entry that
+                // bypasses render()'s expand pass, so it happens now.
+                .map(|i| self.expand(&handler(&ctx, i)))
+                .collect(),
             _ => Vec::new(),
         }
     }

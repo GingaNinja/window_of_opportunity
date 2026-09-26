@@ -5,7 +5,7 @@ struct Window {}
 impl Component for Window {
     fn render(
         &self,
-        ctx: &window_of_opportunity::state::Ctx,
+        _ctx: &window_of_opportunity::state::Ctx,
         _children: Vec<Box<window_of_opportunity::element::Element>>,
     ) -> Box<window_of_opportunity::element::Element> {
         ui! {
