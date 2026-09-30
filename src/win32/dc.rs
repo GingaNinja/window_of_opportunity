@@ -1,4 +1,4 @@
-use super::get_utf16_vec;
+use super::util::get_utf16_vec;
 use windows::Win32::{Foundation::*, Graphics::Gdi::*};
 
 pub struct DeviceContext {
@@ -12,7 +12,7 @@ impl DeviceContext {
     pub fn get_dc(hwnd: HWND) -> Self {
         let hdc: HDC;
         unsafe {
-            hdc = GetDC(hwnd);
+            hdc = GetDC(Some(hwnd));
         }
         DeviceContext {
             hwnd: hwnd,
@@ -138,7 +138,7 @@ impl Drop for DeviceContext {
         unsafe {
             match self.ps {
                 None => {
-                    ReleaseDC(self.hwnd, self.hdc);
+                    ReleaseDC(Some(self.hwnd), self.hdc);
                 }
                 Some(ps) => {
                     let _ = EndPaint(self.hwnd, &ps);
@@ -177,7 +177,7 @@ impl Pen {
 impl Drop for Pen {
     fn drop(&mut self) {
         unsafe {
-            let _ = DeleteObject(self.handle);
+            let _ = DeleteObject(HGDIOBJ(self.handle.0));
         }
     }
 }

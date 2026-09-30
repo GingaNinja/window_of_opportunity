@@ -28,7 +28,7 @@ use cacao::{
 
 use crate::{
     component::Component,
-    element::{BlitFrame, Element, ElementType, PropType, window_spec},
+    element::{BlitFrame, Element, ElementType, PropType, button_label, window_spec},
     input::InputDelegate,
     layout::{Direction, FlexStyle},
     listview::ReactiveListView,
@@ -936,22 +936,8 @@ impl AppState {
     }
 }
 
-/// Messages that cross onto the main queue — the app's single Send
-/// boundary. Widget events travel as dispatch ids; `App(M)` carries the
-/// app's own messages (frames, progress, log lines...) from background
-/// threads to the GUI. Anything a thread wants to say must fit in here
-/// (the same rule as React Native's bridge).
-///
-/// `M` appears in exactly three places in the framework — this enum, the
-/// delegate (`ReactApp<M>`), and `run` — because the button dispatch path
-/// goes through an injected closure (`AppState::dispatch_event`) instead
-/// of naming the concrete types.
-pub enum Message<M> {
-    /// a widget event fired — look up its handler by dispatch id
-    Event(usize),
-    /// an app message, from anywhere
-    App(M),
-}
+/// Shared with every backend — the semantics live on `state::Message`.
+pub use crate::state::Message;
 
 pub struct ReactApp<M> {
     state: Rc<RefCell<AppState>>,
@@ -1196,16 +1182,6 @@ fn color(name: &str) -> Color {
 }
 
 /// The display text of a Button element: its first Text child, if any.
-fn button_label(el: &Element) -> String {
-    el.children
-        .iter()
-        .find_map(|child| match &child.element_type {
-            ElementType::Text(text) => Some(text.clone()),
-            _ => None,
-        })
-        .unwrap_or_default()
-}
-
 /// Marks a constraint as optional (priority 250, below the ~251 priority of
 /// intrinsic content sizes). Used for the "pin the last child to the far edge"
 /// rule: when the container has room, the pin stretches the last child; when it

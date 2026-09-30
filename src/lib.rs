@@ -18,6 +18,4 @@ pub use macos::app;
 #[cfg(target_os = "windows")]
 mod win32;
 #[cfg(target_os = "windows")]
-use win32::widgets;
-#[cfg(target_os = "windows")]
 pub use win32::app;

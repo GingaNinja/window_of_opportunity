@@ -3,7 +3,7 @@ use windows::{
     Win32::{Foundation::*, UI::WindowsAndMessaging::*},
 };
 
-use super::load_cursor;
+use super::util::load_cursor;
 
 pub struct WinCreateArgs {
     pub class_name: PCWSTR,
