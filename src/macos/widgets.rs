@@ -13,9 +13,10 @@ use cacao::{
 };
 
 use crate::{
-    element::{Element, ElementType, PropType},
+    element::Element,
     input::InputDelegate,
     listview::ReactiveListView,
+    reconcile::{self, WidgetKind},
 };
 
 pub enum Widget {
@@ -111,36 +112,23 @@ impl Widget {
     }
 }
 
-/// The props that feed constraint generation — compared between old and new
-/// elements to decide whether a container (or its parent) needs relayout.
-const FLEX_PROPS: &[PropType] = &[
-    PropType::Direction,
-    PropType::Gap,
-    PropType::Padding,
-    PropType::Width,
-    PropType::Height,
-    PropType::Grow,
-];
-
-pub fn flex_changed(old: &Element, new: &Element) -> bool {
-    FLEX_PROPS
-        .iter()
-        .any(|key| old.props.get(*key) != new.props.get(*key))
+/// Which neutral widget flavor is this — the platform half of the
+/// compatibility table (the table itself lives in `reconcile`).
+impl Widget {
+    pub fn kind(&self) -> WidgetKind {
+        match self {
+            Widget::Container { .. } => WidgetKind::Container,
+            Widget::Button { .. } => WidgetKind::Button,
+            Widget::List(_) => WidgetKind::List,
+            Widget::Label(_) => WidgetKind::Label,
+            Widget::Input(_) => WidgetKind::Input,
+            Widget::ImageView { .. } => WidgetKind::Image,
+        }
+    }
 }
 
-/// Can this widget represent the new element in the same position? Kind
-/// must match kind. (Positional only — reordering is not detected; that's
-/// what keys are for, in a future pass.)
+/// Can this widget represent the new element in the same position? Thin
+/// wrapper over the neutral table in `reconcile`.
 pub fn compatible(widget: &Widget, new_el: &Element) -> bool {
-    matches!(
-        (widget, &new_el.element_type),
-        (
-            Widget::Container { .. },
-            ElementType::Window | ElementType::Div
-        ) | (Widget::Button { .. }, ElementType::Button)
-            | (Widget::Label(_), ElementType::Text(_))
-            | (Widget::Input(_), ElementType::Input)
-            | (Widget::ImageView { .. }, ElementType::Image)
-            | (Widget::List(_), ElementType::List)
-    )
+    reconcile::compatible(widget.kind(), &new_el.element_type)
 }

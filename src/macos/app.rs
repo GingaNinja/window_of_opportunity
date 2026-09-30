@@ -1,6 +1,5 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     rc::{Rc, Weak},
     sync::Arc,
 };
@@ -29,12 +28,13 @@ use cacao::{
 
 use crate::{
     component::Component,
-    element::{BlitFrame, Element, ElementType, PropType, window_spec},
+    element::{BlitFrame, Element, ElementType, PropType, button_label, window_spec},
     input::InputDelegate,
     layout::{Direction, FlexStyle},
     listview::ReactiveListView,
-    state::{Ctx, Event, Handler, State},
-    widgets::{Widget, compatible, flex_changed},
+    reconcile::{self, flex_changed},
+    state::{Ctx, Handler, Handlers, State},
+    widgets::{Widget, compatible},
     window::WindowProxy,
 };
 
@@ -188,17 +188,9 @@ pub struct AppState {
     /// render (the root is usually reused, so the old ones are deactivated)
     root_pins: RefCell<Vec<LayoutConstraint>>,
 
-    /// live events, by dispatch id. Ids are never reused: a stale id from a
-    /// previous tree still resolves — and running its updater is harmless,
-    /// since events address slots by key, not by widget identity. (The map
-    /// grows by one entry per mounted handler per render — fine for now,
-    /// prune it when diffing arrives.)
-    handlers_by_id: RefCell<HashMap<usize, Event>>,
-
-    /// the root element's on_resize handler, if it declared one — handed to
-    /// the WindowProxy so user resizes flow through component logic
-    pub resize_handler: RefCell<Option<Handler>>,
-    next_handler_id: Cell<usize>,
+    /// live events by dispatch id + the root's on_resize handler — shared
+    /// bookkeeping, see `state::Handlers`
+    pub handlers: Handlers,
 }
 
 impl AppState {
@@ -217,7 +209,7 @@ impl AppState {
 
         // hand the root's on_resize (if any) to the window proxy — resizes
         // flow through component logic, not a magic state key
-        *self.resize_handler.borrow_mut() = tree.handlers.get("on_resize").cloned();
+        self.handlers.set_resize_handler(tree.handlers.get("on_resize").cloned());
 
         // focus snapshot before reconciling (position + field pointer)
         let focus = self.focused_snapshot();
@@ -339,18 +331,7 @@ impl AppState {
     /// per render (mount or patch), never at display time. Count comes from
     /// the `rows(n)` prop; the handler from `on_display_item`.
     fn snapshot_rows(&self, el: &Element) -> Vec<Box<Element>> {
-        let count: usize = el.props.get_usize(PropType::Rows).unwrap_or_default();
-        let ctx = Ctx { state: &self.state };
-        match el.handlers.get("on_display_item") {
-            Some(Handler::ListItem(handler)) => (0..count)
-                // Rows pass through `expand` here — component nodes must be
-                // inlined before mount (see the `unreachable!` in
-                // mount_element). Rows are the one pipeline entry that
-                // bypasses render()'s expand pass, so it happens now.
-                .map(|i| self.expand(&handler(&ctx, i)))
-                .collect(),
-            _ => Vec::new(),
-        }
+        reconcile::snapshot_rows(&self.state, el)
     }
 
     /// Mounts a row element into a list row's view. Rows are element trees
@@ -457,20 +438,7 @@ impl AppState {
     /// mounting so mount/layout operate on primitives only — and so it's the
     /// framework, not the ui! macro, that hands state to components.
     fn expand(&self, el: &Element) -> Box<Element> {
-        match &el.element_type {
-            ElementType::Component(component) => {
-                let children = el.children.iter().map(|child| self.expand(child)).collect();
-                let ctx = Ctx { state: &self.state };
-                let rendered = component.render(&ctx, children);
-                self.expand(&rendered)
-            }
-            _ => Box::new(Element {
-                element_type: el.element_type.clone(),
-                props: el.props.clone(),
-                handlers: el.handlers.clone(),
-                children: el.children.iter().map(|child| self.expand(child)).collect(),
-            }),
-        }
+        reconcile::expand(&self.state, el)
     }
 
     /// Creates the cacao views for an element tree and returns the mounted
@@ -512,8 +480,7 @@ impl AppState {
                 if let Some(handler) = el.handlers.get("on_click") {
                     match handler {
                         Handler::Simple(event) => {
-                            let id = self.next_handler_id.replace(self.next_handler_id.get() + 1);
-                            self.handlers_by_id.borrow_mut().insert(id, event.clone());
+                            let id = self.handlers.register(event);
                             let send = self.dispatch_event.clone();
                             button.set_action(move || {
                                 send(id);
@@ -821,11 +788,10 @@ impl AppState {
                 if let Some(Handler::Simple(event)) = new_el.handlers.get("on_click") {
                     match handler_id {
                         Some(id) => {
-                            self.handlers_by_id.borrow_mut().insert(*id, event.clone());
+                            self.handlers.refresh(*id, event);
                         }
                         None => {
-                            let id = self.next_handler_id.replace(self.next_handler_id.get() + 1);
-                            self.handlers_by_id.borrow_mut().insert(id, event.clone());
+                            let id = self.handlers.register(event);
                             let send = self.dispatch_event.clone();
                             control.set_action(move || {
                                 send(id);
@@ -941,39 +907,25 @@ impl AppState {
             }
         }
 
-        let mut needs_relayout =
-            old_el.children.len() != new_el.children.len() || flex_changed(old_el, new_el);
-
-        for index in 0..new_el.children.len() {
-            let new_child = &new_el.children[index];
-
-            let mut slot_ok = false;
-            if let (Some(child_widget), Some(old_child)) =
-                (children.get_mut(index), old_el.children.get(index))
-            {
-                slot_ok = compatible(child_widget, new_child);
-                if slot_ok {
-                    self.patch(view, child_widget, old_child, new_child);
-                    if flex_changed(old_child, new_child) {
-                        needs_relayout = true;
-                    }
-                }
-            }
-
-            if !slot_ok {
-                // replaced (old drops) or appended
+        // The shared children-diff skeleton (positional match, replace-on-
+        // incompat, append, truncate) with this platform's ops as closures.
+        // `view` is re-borrowed shared so both closures can use it.
+        let view: &View = view;
+        let mut needs_relayout = flex_changed(old_el, new_el);
+        needs_relayout |= reconcile::reconcile_children(
+            children,
+            &old_el.children,
+            &new_el.children,
+            compatible,
+            |child_widget, old_child, new_child| {
+                self.patch(view, child_widget, old_child, new_child)
+            },
+            |new_child| {
                 let mut fresh = self.mount_element(view, new_child);
                 self.layout_node(new_child, &mut fresh);
-                match children.get_mut(index) {
-                    Some(slot) => *slot = fresh,
-                    None => children.push(fresh),
-                }
-                needs_relayout = true;
-            }
-        }
-
-        // vanished children drop — their views remove themselves
-        children.truncate(new_el.children.len());
+                fresh
+            },
+        );
 
         if needs_relayout {
             LayoutConstraint::deactivate(constraints);
@@ -984,22 +936,8 @@ impl AppState {
     }
 }
 
-/// Messages that cross onto the main queue — the app's single Send
-/// boundary. Widget events travel as dispatch ids; `App(M)` carries the
-/// app's own messages (frames, progress, log lines...) from background
-/// threads to the GUI. Anything a thread wants to say must fit in here
-/// (the same rule as React Native's bridge).
-///
-/// `M` appears in exactly three places in the framework — this enum, the
-/// delegate (`ReactApp<M>`), and `run` — because the button dispatch path
-/// goes through an injected closure (`AppState::dispatch_event`) instead
-/// of naming the concrete types.
-pub enum Message<M> {
-    /// a widget event fired — look up its handler by dispatch id
-    Event(usize),
-    /// an app message, from anywhere
-    App(M),
-}
+/// Shared with every backend — the semantics live on `state::Message`.
+pub use crate::state::Message;
 
 pub struct ReactApp<M> {
     state: Rc<RefCell<AppState>>,
@@ -1071,9 +1009,7 @@ impl<M: Send + Sync + 'static> ReactApp<M> {
             dispatch_event,
             last_tree: None,
             root_pins: RefCell::new(Vec::new()),
-            handlers_by_id: RefCell::new(HashMap::new()),
-            resize_handler: RefCell::new(None),
-            next_handler_id: Cell::new(0),
+            handlers: Handlers::new(),
             last_requested_size: Cell::new(None),
         }));
         *weak_cell.borrow_mut() = Some(Rc::downgrade(&state));
@@ -1140,13 +1076,7 @@ impl<M: Send + Sync + 'static> Dispatcher for ReactApp<M> {
         // the borrow before reload_lists — item_for must find it free.
         match message {
             Message::Event(id) => {
-                let handler = self
-                    .state
-                    .borrow()
-                    .handlers_by_id
-                    .borrow()
-                    .get(&id)
-                    .cloned();
+                let handler = self.state.borrow().handlers.event(id);
                 match handler {
                     Some(handler) => {
                         {
@@ -1252,16 +1182,6 @@ fn color(name: &str) -> Color {
 }
 
 /// The display text of a Button element: its first Text child, if any.
-fn button_label(el: &Element) -> String {
-    el.children
-        .iter()
-        .find_map(|child| match &child.element_type {
-            ElementType::Text(text) => Some(text.clone()),
-            _ => None,
-        })
-        .unwrap_or_default()
-}
-
 /// Marks a constraint as optional (priority 250, below the ~251 priority of
 /// intrinsic content sizes). Used for the "pin the last child to the far edge"
 /// rule: when the container has room, the pin stretches the last child; when it
