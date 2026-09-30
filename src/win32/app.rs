@@ -21,13 +21,13 @@ use std::{
 };
 
 use windows::{
-    core::*,
     Win32::{
         Foundation::*,
         Graphics::Gdi::{GetStockObject, HBRUSH, WHITE_BRUSH},
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::*,
     },
+    core::*,
 };
 
 use crate::{
@@ -52,6 +52,11 @@ const WM_APP_EVENT: u32 = WM_APP + 1;
 const WM_APP_MSG: u32 = WM_APP + 2;
 
 const CLASS_NAME: PCWSTR = w!("wo_mainwin");
+
+/// Control id for "this control has no handler" — also win32's NULL HMENU
+/// (id 0 = "no identifier"). Dispatch ids start at 1 (see
+/// `Handlers::default`), so the two spaces can't collide.
+const NO_HANDLER_ID: usize = 0;
 
 /// The main window, so `dispatch` works from any thread (PostMessage is
 /// thread-safe and lands on the message-loop thread).
@@ -218,6 +223,9 @@ impl AppState {
         // expand component nodes so patch/mount only ever see primitives
         let tree = reconcile::expand(&self.state, &tree);
 
+        #[cfg(feature = "debug_dump")]
+        println!("{tree:#?}");
+
         let spec = window_spec(&tree);
         self.handlers
             .set_resize_handler(tree.handlers.get("on_resize").cloned());
@@ -229,10 +237,15 @@ impl AppState {
             }
             (_, root_widget) => {
                 // first render: mount fresh
-                let root_widget = root_widget
-                    .unwrap_or_else(|| self.mount_element(self.hwnd, &tree));
+                let root_widget =
+                    root_widget.unwrap_or_else(|| self.mount_element(self.hwnd, &tree));
                 self.root_widget = Some(root_widget);
             }
+        }
+        let title = get_utf16_vec(&spec.title);
+
+        unsafe {
+            let _ = SetWindowTextW(self.hwnd, PCWSTR(title.as_ptr()));
         }
 
         // Sizing: explicit props win; a missing axis hugs the content.
@@ -245,9 +258,7 @@ impl AppState {
         };
         let client_w = spec.width.map(|w| w as i32).unwrap_or(natural_w);
         let client_h = spec.height.map(|h| h as i32).unwrap_or(natural_h);
-        if self
-            .last_requested_size
-            .replace(Some((client_w, client_h)))
+        if self.last_requested_size.replace(Some((client_w, client_h)))
             != Some((client_w, client_h))
         {
             unsafe {
@@ -305,7 +316,7 @@ impl AppState {
                 // SS_LEFT is literally the empty style bits (left-aligned is
                 // a static's default) — pass 0 and skip the SystemServices
                 // feature just for a zero constant
-                hwnd: self.create_control(w!("static"), text, 0, parent, 0),
+                hwnd: self.create_control(w!("static"), text, 0, parent, NO_HANDLER_ID),
             },
             ElementType::Button => {
                 // The dispatch id IS the control id — WM_COMMAND carries it
@@ -315,7 +326,7 @@ impl AppState {
                     Some(Handler::Simple(event)) => Some(self.handlers.register(event)),
                     _ => None,
                 };
-                let id = handler_id.unwrap_or(0);
+                let id = handler_id.unwrap_or(NO_HANDLER_ID);
                 debug_assert!(id <= 0xffff, "dispatch id must fit WM_COMMAND's 16 bits");
                 Widget::Button {
                     hwnd: self.create_control(
@@ -424,9 +435,7 @@ impl AppState {
             &old_el.children,
             &new_el.children,
             widgets::compatible,
-            |child_widget, old_child, new_child| {
-                self.patch(child_widget, old_child, new_child)
-            },
+            |child_widget, old_child, new_child| self.patch(child_widget, old_child, new_child),
             |child_el| self.mount_element(self.hwnd, child_el),
         );
     }
@@ -451,73 +460,68 @@ fn fire_and_render(app: &RefCell<AppState>, id: usize) {
 
 /// The WndProc is the delegate: `did_finish_launching` happened in `run`,
 /// and everything below is Dispatcher + WindowProxy + (later) InputDelegate.
-unsafe extern "system" fn wndproc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
         let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Rc<RefCell<AppState>>;
-    if ptr.is_null() {
-        if msg == WM_NCCREATE {
-            // lpParam is the Rc<RefCell<AppState>> — park it here for every
-            // later message (the GWLP_USERDATA pattern from the old code,
-            // now leading to the app instead of a `Win`)
-            let cs = &*(lparam.0 as *const CREATESTRUCTW);
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize);
+        if ptr.is_null() {
+            if msg == WM_NCCREATE {
+                // lpParam is the Rc<RefCell<AppState>> — park it here for every
+                // later message (the GWLP_USERDATA pattern from the old code,
+                // now leading to the app instead of a `Win`)
+                let cs = &*(lparam.0 as *const CREATESTRUCTW);
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize);
+            }
+            return DefWindowProcW(hwnd, msg, wparam, lparam);
         }
-        return DefWindowProcW(hwnd, msg, wparam, lparam);
-    }
-    let app = &*ptr;
+        let app = &*ptr;
 
-    match msg {
-        WM_COMMAND => {
-            // child controls report here: LOWORD(wparam) is the control id
-            // (== dispatch id), HIWORD the notification code
-            let id = (wparam.0 & 0xffff) as usize;
-            let code = ((wparam.0 >> 16) & 0xffff) as u32;
-            if code == BN_CLICKED {
-                fire_and_render(app, id);
+        match msg {
+            WM_COMMAND => {
+                // child controls report here: LOWORD(wparam) is the control id
+                // (== dispatch id), HIWORD the notification code
+                let id = (wparam.0 & 0xffff) as usize;
+                let code = ((wparam.0 >> 16) & 0xffff) as u32;
+                if code == BN_CLICKED {
+                    fire_and_render(app, id);
+                    return LRESULT(0);
+                }
+            }
+            WM_APP_EVENT => {
+                fire_and_render(app, wparam.0 as usize);
                 return LRESULT(0);
             }
-        }
-        WM_APP_EVENT => {
-            fire_and_render(app, wparam.0 as usize);
-            return LRESULT(0);
-        }
-        WM_APP_MSG => {
-            // the app-side half of the Send boundary (see `dispatch`)
-            let message = *Box::from_raw(lparam.0 as *mut Box<dyn Any + Send>);
-            if let Ok(mut app) = app.try_borrow_mut() {
-                app.deliver_app_message(message);
-                app.render();
-            }
-            return LRESULT(0);
-        }
-        WM_SIZE => {
-            // the WindowProxy.did_resize role: user resizes flow through
-            // component logic (on_resize), then the tree follows. lparam
-            // carries the new client size (loword = width, hiword = height)
-            if let Ok(mut app) = app.try_borrow_mut() {
-                let (w, h) = (
-                    (lparam.0 & 0xffff) as f64,
-                    ((lparam.0 >> 16) & 0xffff) as f64,
-                );
-                if let Some(Handler::Resize(f)) = app.handlers.resize_handler() {
-                    f(&app.state, w, h);
+            WM_APP_MSG => {
+                // the app-side half of the Send boundary (see `dispatch`)
+                let message = *Box::from_raw(lparam.0 as *mut Box<dyn Any + Send>);
+                if let Ok(mut app) = app.try_borrow_mut() {
+                    app.deliver_app_message(message);
+                    app.render();
                 }
-                app.render();
+                return LRESULT(0);
             }
-            return LRESULT(0);
-        }
+            WM_SIZE => {
+                // the WindowProxy.did_resize role: user resizes flow through
+                // component logic (on_resize), then the tree follows. lparam
+                // carries the new client size (loword = width, hiword = height)
+                if let Ok(mut app) = app.try_borrow_mut() {
+                    let (w, h) = (
+                        (lparam.0 & 0xffff) as f64,
+                        ((lparam.0 >> 16) & 0xffff) as f64,
+                    );
+                    if let Some(Handler::Resize(f)) = app.handlers.resize_handler() {
+                        f(&app.state, w, h);
+                    }
+                    app.render();
+                }
+                return LRESULT(0);
+            }
             WM_DESTROY => PostQuitMessage(0),
-        WM_NCDESTROY => {
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-            drop(Box::from_raw(ptr as *mut Rc<RefCell<AppState>>));
+            WM_NCDESTROY => {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                drop(Box::from_raw(ptr as *mut Rc<RefCell<AppState>>));
+            }
+            _ => {}
         }
-        _ => {}
-    }
-    DefWindowProcW(hwnd, msg, wparam, lparam)
+        DefWindowProcW(hwnd, msg, wparam, lparam)
     }
 }

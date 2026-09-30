@@ -135,7 +135,6 @@ pub enum Message<M> {
 /// slots by key, not by widget identity. (The map grows by one entry per
 /// mounted handler per render — fine for now, prune it when diffing
 /// catches up.)
-#[derive(Default)]
 pub struct Handlers {
     by_id: RefCell<HashMap<usize, Event>>,
     next_id: Cell<usize>,
@@ -145,12 +144,28 @@ pub struct Handlers {
     resize: RefCell<Option<Handler>>,
 }
 
+impl Default for Handlers {
+    fn default() -> Self {
+        Self {
+            by_id: RefCell::new(HashMap::new()),
+            // Dispatch ids start at 1. On win32 a dispatch id is also the
+            // control id, and 0 is reserved there: it's the NULL HMENU and
+            // the "this control has no handler" sentinel — starting above
+            // it keeps the two spaces from colliding (a bug once observed as
+            // "clicking either button runs the one handler").
+            next_id: Cell::new(1),
+            resize: RefCell::new(None),
+        }
+    }
+}
+
 impl Handlers {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Stores an event under a fresh dispatch id and returns it.
+    /// Stores an event under a fresh dispatch id and returns it. Ids are
+    /// dense and increasing, never 0 (see `Default`).
     pub fn register(&self, event: &Event) -> usize {
         let id = self.next_id.replace(self.next_id.get() + 1);
         self.by_id.borrow_mut().insert(id, event.clone());
@@ -246,6 +261,23 @@ mod tests {
         // the root's on_resize rides along in the same bookkeeping
         assert!(handlers.resize_handler().is_none());
         handlers.set_resize_handler(Some(Handler::Simple(event)));
-        assert!(matches!(handlers.resize_handler(), Some(Handler::Simple(_))));
+        assert!(matches!(
+            handlers.resize_handler(),
+            Some(Handler::Simple(_))
+        ));
+    }
+
+    #[test]
+    fn dispatch_ids_never_collide_with_the_no_handler_sentinel() {
+        let handlers = Handlers::new();
+        let event = Event(Rc::new(|_| {}));
+
+        let first = handlers.register(&event);
+        let second = handlers.register(&event);
+        assert_ne!(
+            first, 0,
+            "win32 control id 0 means 'no handler' — dispatch ids start above it"
+        );
+        assert_eq!(second, first + 1, "ids are dense and increasing");
     }
 }
