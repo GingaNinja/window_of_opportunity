@@ -112,6 +112,23 @@ impl Debug for Event {
 }
 
 /// What components render with: read access to state, plus the hooks.
+/// Messages that cross onto the main queue — the app's single Send
+/// boundary. Widget events travel as dispatch ids; `App(M)` carries the
+/// app's own messages (frames, progress, log lines...) from background
+/// threads to the GUI. Anything a thread wants to say must fit in here
+/// (the same rule as React Native's bridge).
+///
+/// `M` appears in exactly three places in the framework — this enum, the
+/// platform delegate, and `run` — because the widget dispatch path goes
+/// through an injected closure (`AppState::dispatch_event`) instead of
+/// naming the concrete types.
+pub enum Message<M> {
+    /// a widget event fired — look up its handler by dispatch id
+    Event(usize),
+    /// an app message, from anywhere
+    App(M),
+}
+
 /// Live event registry, by dispatch id — shared bookkeeping, platform
 /// neutral. Ids are never reused: a stale id from a previous tree still
 /// resolves — and running its updater is harmless, since events address

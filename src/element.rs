@@ -50,6 +50,19 @@ pub fn window_spec(tree: &Element) -> WindowSpec {
     }
 }
 
+/// The label text of a Button element: its first Text child (empty when
+/// there isn't one). Both backends read the same spot — cacao's `setTitle`
+/// and win32's `SetWindowTextW`.
+pub fn button_label(el: &Element) -> String {
+    el.children
+        .iter()
+        .find_map(|child| match &child.element_type {
+            ElementType::Text(text) => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Prop {
     Float(f64),
