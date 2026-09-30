@@ -55,14 +55,14 @@ Note, hardly anything works, but creating a basic application is possible, and t
 
 | Feature | Macos | Win32 | Gtk |
 | ------- | ----- | ----- | --- |
-| Button | ✅ | ❌ | ❌ |
-| Label | ✅ | ❌ | ❌ |
+| Button | ✅ | ✅ | ❌ |
+| Label | ✅ | ✅ | ❌ |
 | Image (using BlitFrame) |  ✅ | ❌ | ❌ |
 | Input |  ✅ | ❌ | ❌ |
-| Window |  ✅ | ❌ | ❌ |
+| Window |  ✅ | ✅ | ❌ |
 | Window resizing |  ✅ | ❌ | ❌ |
-| Window title |  ✅ | ❌ | ❌ |
-| Layout |  ✅ | ❌ | ❌ |
+| Window title |  ✅ | ✅ | ❌ |
+| Layout |  ✅ | ✅ | ❌ |
 | List | ✅ | ❌ | ❌ |
 | Test target | ❌ | ❌ | ❌ |
 
