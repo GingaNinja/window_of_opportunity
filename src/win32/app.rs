@@ -511,6 +511,7 @@ unsafe extern "system" fn wndproc(
             }
             return LRESULT(0);
         }
+            WM_DESTROY => PostQuitMessage(0),
         WM_NCDESTROY => {
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             drop(Box::from_raw(ptr as *mut Rc<RefCell<AppState>>));
