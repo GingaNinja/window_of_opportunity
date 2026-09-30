@@ -571,7 +571,7 @@ mod typed_prop_tests {
 // (component props: custom types, partial props, hand-written Default)
 #[cfg(test)]
 mod component_prop_tests {
-    use crate::component::Component;
+    use super::*;
 
     #[derive(Debug)]
     struct Tag(&'static str); // deliberately NOT Default
@@ -612,12 +612,18 @@ mod component_prop_tests {
         let debug = format!("{:?}", el.element_type);
         assert!(debug.contains("hi"), "custom type landed: {debug}");
         assert!(debug.contains("count: 2"), "primitive landed: {debug}");
-        assert!(debug.contains("label: \"\""), "unset field kept Default: {debug}");
+        assert!(
+            debug.contains("label: \"\""),
+            "unset field kept Default: {debug}"
+        );
 
         // bare usage goes through Default too
         let el = crate::ui! { Fancy };
         let debug = format!("{:?}", el.element_type);
-        assert!(debug.contains("tag: Tag(\"none\")"), "bare = Default: {debug}");
+        assert!(
+            debug.contains("tag: Tag(\"none\")"),
+            "bare = Default: {debug}"
+        );
 
         // props + children both
         let el = crate::ui! { Fancy count(7) { { crate::ui! { Text "child" } } } };

@@ -59,7 +59,7 @@ impl WindowDelegate for WindowProxy {
         let handler = app
             .try_borrow()
             .ok()
-            .and_then(|app| app.resize_handler.borrow().clone());
+            .and_then(|app| app.handlers.resize_handler());
 
         let handler = match handler {
             Some(Handler::Resize(handler)) => handler,

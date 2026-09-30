@@ -4,6 +4,7 @@ pub mod element;
 mod input;
 mod layout;
 mod listview;
+mod reconcile;
 pub mod state;
 mod widgets;
 mod window;

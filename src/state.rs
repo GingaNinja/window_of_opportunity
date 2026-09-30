@@ -4,7 +4,7 @@
 
 use std::{
     any::Any,
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     fmt::{self, Debug},
     rc::Rc,
@@ -112,6 +112,65 @@ impl Debug for Event {
 }
 
 /// What components render with: read access to state, plus the hooks.
+/// Live event registry, by dispatch id — shared bookkeeping, platform
+/// neutral. Ids are never reused: a stale id from a previous tree still
+/// resolves — and running its updater is harmless, since events address
+/// slots by key, not by widget identity. (The map grows by one entry per
+/// mounted handler per render — fine for now, prune it when diffing
+/// catches up.)
+#[derive(Default)]
+pub struct Handlers {
+    by_id: RefCell<HashMap<usize, Event>>,
+    next_id: Cell<usize>,
+
+    /// the root element's on_resize handler, if it declared one — handed to
+    /// the window layer so user resizes flow through component logic
+    resize: RefCell<Option<Handler>>,
+}
+
+impl Handlers {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Stores an event under a fresh dispatch id and returns it.
+    pub fn register(&self, event: &Event) -> usize {
+        let id = self.next_id.replace(self.next_id.get() + 1);
+        self.by_id.borrow_mut().insert(id, event.clone());
+        id
+    }
+
+    /// Re-stores the handler under an existing dispatch id — the widget's
+    /// action closure keeps firing this id while the handler stays current.
+    pub fn refresh(&self, id: usize, event: &Event) {
+        self.by_id.borrow_mut().insert(id, event.clone());
+    }
+
+    /// The live handler for a dispatch id, if it's still around.
+    pub fn event(&self, id: usize) -> Option<Event> {
+        self.by_id.borrow().get(&id).cloned()
+    }
+
+    /// Fires the handler for a dispatch id — false if the id is stale.
+    pub fn fire(&self, id: usize, state: &State) -> bool {
+        match self.event(id) {
+            Some(event) => {
+                event.fire(state);
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn set_resize_handler(&self, handler: Option<Handler>) {
+        *self.resize.borrow_mut() = handler;
+    }
+
+    pub fn resize_handler(&self) -> Option<Handler> {
+        self.resize.borrow().clone()
+    }
+}
+
 pub struct Ctx<'a> {
     pub state: &'a State,
 }
@@ -137,5 +196,39 @@ impl Ctx<'_> {
         Event(Rc::new(move |state: &State| {
             state.update(&key, |v| updater(v))
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn handlers_register_refresh_fire() {
+        let state = State::default();
+        let handlers = Handlers::new();
+
+        let fired = Rc::new(RefCell::new(0));
+        let f = fired.clone();
+        let event = Event(Rc::new(move |_| *f.borrow_mut() += 1));
+
+        let id = handlers.register(&event);
+        assert!(handlers.fire(id, &state));
+        assert_eq!(*fired.borrow(), 1);
+
+        // refresh keeps the id stable but the handler current
+        let f = fired.clone();
+        let fresh = Event(Rc::new(move |_| *f.borrow_mut() += 10));
+        handlers.refresh(id, &fresh);
+        assert!(handlers.fire(id, &state));
+        assert_eq!(*fired.borrow(), 11, "the refreshed handler ran");
+
+        // stale id is refused, not panicked
+        assert!(!handlers.fire(999, &state));
+
+        // the root's on_resize rides along in the same bookkeeping
+        assert!(handlers.resize_handler().is_none());
+        handlers.set_resize_handler(Some(Handler::Simple(event)));
+        assert!(matches!(handlers.resize_handler(), Some(Handler::Simple(_))));
     }
 }
