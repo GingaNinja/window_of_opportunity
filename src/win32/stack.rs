@@ -19,7 +19,7 @@
 use windows::Win32::{
     Foundation::{HWND, SIZE},
     Graphics::Gdi::{GetDC, GetTextExtentPoint32W, ReleaseDC},
-    UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER},
+    UI::WindowsAndMessaging::{GetParent, SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER},
 };
 
 use crate::{
@@ -50,14 +50,25 @@ pub fn arrange(el: &Element, widget: &mut Widget, area: Box2) {
         style.height.map(|h| h as i32).unwrap_or(area.h),
     );
 
-    let Widget::Container { children } = widget else {
+    let Widget::Container {
+        hwnd,
+        children,
+        ..
+    } = widget
+    else {
         place(widget, x, y, w, h);
         return;
     };
 
+    // the container's own window goes here (the root excepted — see
+    // place_hwnd)
+    place_hwnd(*hwnd, x, y, w, h);
+
+    // children live in the container's CLIENT space, so the inner box is
+    // 0-based no matter where the container sits in its own parent
     let inner = Box2 {
-        x: x + pad,
-        y: y + pad,
+        x: pad,
+        y: pad,
         w: w - 2 * pad,
         h: h - 2 * pad,
     };
@@ -127,7 +138,7 @@ pub fn natural(el: &Element, widget: &Widget) -> (i32, i32) {
     let (mut w, mut h) = match (widget, &el.element_type) {
         (Widget::Button { hwnd, .. }, _) => measure_button(*hwnd, &button_label(el)),
         (Widget::Label { hwnd }, ElementType::Text(text)) => measure_text(*hwnd, text),
-        (Widget::Container { children }, _) => {
+        (Widget::Container { children, .. }, _) => {
             let gap = style.gap as i32;
             let (mut main, mut cross) = (0, 0);
             for (child_el, child_widget) in el.children.iter().zip(children.iter()) {
@@ -166,7 +177,16 @@ fn place(widget: &Widget, x: i32, y: i32, w: i32, h: i32) {
         Widget::Button { hwnd, .. } | Widget::Label { hwnd } => *hwnd,
         Widget::Container { .. } => return,
     };
+    place_hwnd(hwnd, x, y, w, h);
+}
+
+fn place_hwnd(hwnd: HWND, x: i32, y: i32, w: i32, h: i32) {
     unsafe {
+        // the root's hwnd is the top-level window — its position is the
+        // user's, never the layout's
+        if GetParent(hwnd).is_err() {
+            return;
+        }
         let _ = SetWindowPos(hwnd, None, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
     }
 }

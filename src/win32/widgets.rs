@@ -5,14 +5,25 @@
 // with WM_CTLCOLOR* handling later.
 // ---------------------------------------------------------------------------
 
-use windows::Win32::{Foundation::HWND, UI::WindowsAndMessaging::DestroyWindow};
+use windows::Win32::{
+    Foundation::HWND,
+    Graphics::Gdi::{DeleteObject, HBRUSH},
+    UI::WindowsAndMessaging::{DestroyWindow, GetParent},
+};
 
 use crate::{element::Element, reconcile::WidgetKind};
 
 pub enum Widget {
-    /// Window/Div: a region in the parent's coordinate space. Children are
-    /// positioned by the stack layout engine.
-    Container { children: Vec<Widget> },
+    /// Window/Div: a real child window (the `wo_div` class) — it paints its
+    /// own background and is the parent of its children's controls.
+    /// `hwnd` for the ROOT container is the main window itself.
+    Container {
+        hwnd: HWND,
+        /// the background brush, if the element asked for one — `None`
+        /// means "inherit the parent's", like a transparent NSView
+        background: Option<HBRUSH>,
+        children: Vec<Widget>,
+    },
     Button {
         hwnd: HWND,
         /// the dispatch id of the wired on_click — also this control's child
@@ -36,14 +47,28 @@ impl Widget {
 }
 
 /// Mirrors the cacao side: dropping a widget unmounts it. Leaf HWNDs
-/// destroy themselves here; containers are regions whose children drop
-/// recursively.
+/// destroy themselves here; a container destroys its div window (which
+/// takes its children's controls with it — their own Drops then no-op on
+/// the already-gone handles) and frees its brush. The root container is
+/// skipped: its hwnd IS the window the user owns.
 impl Drop for Widget {
     fn drop(&mut self) {
-        if let Widget::Button { hwnd, .. } | Widget::Label { hwnd } = self {
-            unsafe {
+        match self {
+            Widget::Button { hwnd, .. } | Widget::Label { hwnd } => unsafe {
                 let _ = DestroyWindow(*hwnd);
-            }
+            },
+            Widget::Container {
+                hwnd,
+                background,
+                ..
+            } => unsafe {
+                if GetParent(*hwnd).is_ok() {
+                    let _ = DestroyWindow(*hwnd);
+                }
+                if let Some(brush) = background {
+                    let _ = DeleteObject((*brush).into());
+                }
+            },
         }
     }
 }

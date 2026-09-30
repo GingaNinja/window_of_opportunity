@@ -23,7 +23,10 @@ use std::{
 use windows::{
     Win32::{
         Foundation::*,
-        Graphics::Gdi::{GetStockObject, HBRUSH, WHITE_BRUSH},
+        Graphics::Gdi::{
+            CreateSolidBrush, DeleteObject, FillRect, InvalidateRect, SetBkMode, HBRUSH, HDC,
+            TRANSPARENT,
+        },
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::*,
     },
@@ -32,7 +35,7 @@ use windows::{
 
 use crate::{
     component::Component,
-    element::{Element, ElementType, button_label, window_spec},
+    element::{Element, ElementType, PropType, button_label, window_spec},
     reconcile,
     state::{Ctx, Handler, Handlers, State},
 };
@@ -50,8 +53,12 @@ pub use crate::state::Message;
 /// app messages as `WM_APP + 2` (lparam = `Box<dyn Any + Send>`).
 const WM_APP_EVENT: u32 = WM_APP + 1;
 const WM_APP_MSG: u32 = WM_APP + 2;
+/// "what brush do you paint with?" — asked by undecorated divs that
+/// inherit their parent's backdrop (the transparent-NSView behavior)
+const WM_GET_BG_BRUSH: u32 = WM_APP + 3;
 
 const CLASS_NAME: PCWSTR = w!("wo_mainwin");
+const DIV_CLASS: PCWSTR = w!("wo_div");
 
 /// Control id for "this control has no handler" — also win32's NULL HMENU
 /// (id 0 = "no identifier"). Dispatch ids start at 1 (see
@@ -102,6 +109,7 @@ impl Application {
             let win_h = rect.bottom - rect.top;
 
             register_class(hinst);
+            register_div_class(hinst);
 
             // The app-message adapter: downcasts the erased payload back to
             // M. This is what keeps AppState non-generic (the cacao side
@@ -186,7 +194,11 @@ fn register_class(hinst: HINSTANCE) {
             hInstance: hinst,
             hCursor: load_cursor(None, IDC_ARROW).unwrap(),
             hIcon: load_icon(hinst, IDI_APPLICATION).unwrap_or_default(),
-            hbrBackground: HBRUSH(GetStockObject(WHITE_BRUSH).0),
+            // the backdrop behind the root — the macOS content view's gray
+            // (rgb 151,143,143) so undecorated content blends the same way
+            // on both platforms. Leaked by design: the class owns it for
+            // the process's life.
+            hbrBackground: CreateSolidBrush(COLORREF(0x008F_8F97)),
             lpszClassName: CLASS_NAME,
             cbSize: mem::size_of::<WNDCLASSEXW>() as u32,
             ..Default::default()
@@ -194,6 +206,97 @@ fn register_class(hinst: HINSTANCE) {
         let atom = RegisterClassExW(&wc);
         debug_assert!(atom != 0);
     }
+}
+
+/// The Div class: no class brush (divs paint themselves), the brush rides
+/// in each window's GWLP_USERDATA (set from lpParam at creation).
+fn register_div_class(hinst: HINSTANCE) {
+    unsafe {
+        let wc = WNDCLASSEXW {
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(divproc),
+            hInstance: hinst,
+            hCursor: load_cursor(None, IDC_ARROW).unwrap(),
+            hbrBackground: HBRUSH::default(),
+            lpszClassName: DIV_CLASS,
+            cbSize: mem::size_of::<WNDCLASSEXW>() as u32,
+            ..Default::default()
+        };
+        let atom = RegisterClassExW(&wc);
+        debug_assert!(atom != 0);
+    }
+}
+
+/// The brush a div paints with: its own if it has one, else the parent's —
+/// an undecorated Div shows its parent's backdrop like a transparent
+/// NSView does on the cacao side.
+fn background_brush(hwnd: HWND) -> HBRUSH {
+    unsafe {
+        let own = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+        if own != 0 {
+            return HBRUSH(own as *mut _);
+        }
+        match GetParent(hwnd) {
+            Ok(parent) => {
+                HBRUSH(SendMessageW(parent, WM_GET_BG_BRUSH, None, None).0 as *mut _)
+            }
+            Err(_) => HBRUSH::default(),
+        }
+    }
+}
+
+/// The `wo_div` class proc: a Div paints its own background and lends its
+/// brush to children drawn on it. (Themed pushbuttons ignore
+/// WM_CTLCOLORBTN — our manifest-less classic controls honor it.)
+unsafe extern "system" fn divproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    unsafe {
+        match msg {
+            WM_NCCREATE => {
+                let cs = &*(lparam.0 as *const CREATESTRUCTW);
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize);
+            }
+            WM_ERASEBKGND => {
+                let hdc = HDC(wparam.0 as *mut _);
+                let mut rect = RECT::default();
+                let _ = GetClientRect(hwnd, &mut rect);
+                FillRect(hdc, &rect, background_brush(hwnd));
+                return LRESULT(1);
+            }
+            WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLOREDIT => {
+                // children drawn on this div blend into its background
+                let hdc = HDC(wparam.0 as *mut _);
+                SetBkMode(hdc, TRANSPARENT);
+                return LRESULT(background_brush(hwnd).0 as isize);
+            }
+            WM_GET_BG_BRUSH => {
+                return LRESULT(background_brush(hwnd).0 as isize);
+            }
+            _ => {}
+        }
+        DefWindowProcW(hwnd, msg, wparam, lparam)
+    }
+}
+
+/// Windows color mapping — the Apple system (light) colors the cacao
+/// `color()` uses, as COLORREF (0x00BBGGRR), so the same ui! code looks
+/// right on both platforms.
+fn color_ref(name: &str) -> COLORREF {
+    match name {
+        "blue" => COLORREF(0x00FF_7A00),  // rgb(0, 122, 255)
+        "red" => COLORREF(0x0030_3BFF),   // rgb(255, 59, 48)
+        "green" => COLORREF(0x0058_D130), // rgb(48, 209, 88)
+        "gray" => COLORREF(0x0093_8E8E),  // rgb(142, 142, 147)
+        _ => COLORREF(0x005E_84A2),       // rgb(162, 132, 94) — SystemBrown
+    }
+}
+
+fn color_brush(name: &str) -> HBRUSH {
+    unsafe { CreateSolidBrush(color_ref(name)) }
 }
 
 pub(crate) struct AppState {
@@ -305,13 +408,32 @@ impl AppState {
 
     fn mount_element(&self, parent: HWND, el: &Element) -> Widget {
         match &el.element_type {
-            ElementType::Window | ElementType::Div => Widget::Container {
+            // the root's container hwnd IS the window itself
+            ElementType::Window => Widget::Container {
+                hwnd: parent,
+                background: None,
                 children: el
                     .children
                     .iter()
                     .map(|child| self.mount_element(parent, child))
                     .collect(),
             },
+            ElementType::Div => {
+                // a Div is a real child window — the win32 analogue of the
+                // cacao view: it paints its own background and its
+                // children's controls live inside it
+                let background = el.props.get_string(PropType::Background).map(color_brush);
+                let hwnd = self.create_div(parent, background);
+                Widget::Container {
+                    hwnd,
+                    background,
+                    children: el
+                        .children
+                        .iter()
+                        .map(|child| self.mount_element(hwnd, child))
+                        .collect(),
+                }
+            }
             ElementType::Text(text) => Widget::Label {
                 // SS_LEFT is literally the empty style bits (left-aligned is
                 // a static's default) — pass 0 and skip the SystemServices
@@ -345,6 +467,28 @@ impl AppState {
             ElementType::Component(_) => {
                 unreachable!("component elements are expanded before mounting")
             }
+        }
+    }
+
+    /// A Div's child window — its own background brush rides along as
+    /// lpParam (null = inherit the parent's).
+    fn create_div(&self, parent: HWND, background: Option<HBRUSH>) -> HWND {
+        unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                DIV_CLASS,
+                w!(""),
+                WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
+                0,
+                0,
+                10,
+                10, // arrange() positions it before anything is visible
+                Some(parent),
+                None,
+                Some(HINSTANCE(GetModuleHandleW(None).unwrap().0)),
+                Some(background.map_or(std::ptr::null(), |brush| brush.0) as *const _),
+            )
+            .expect("CreateWindowExW div")
         }
     }
 
@@ -423,9 +567,41 @@ impl AppState {
     }
 
     fn patch_container(&self, widget: &mut Widget, old_el: &Element, new_el: &Element) {
-        let Widget::Container { children } = widget else {
+        let Widget::Container {
+            hwnd,
+            background,
+            children,
+        } = widget
+        else {
             unreachable!("patch_container called on a non-container")
         };
+
+        // Reconcile the background prop (visual only) — the cacao twin of
+        // this block sets the NSView's color. The root window is skipped:
+        // its backdrop is the class brush, and its GWLP_USERDATA holds the
+        // app, not a brush.
+        if *hwnd != self.hwnd
+            && old_el.props.get_string(PropType::Background)
+                != new_el.props.get_string(PropType::Background)
+        {
+            let new_brush = new_el
+                .props
+                .get_string(PropType::Background)
+                .map(color_brush);
+            if let Some(old) = std::mem::replace(background, new_brush) {
+                unsafe {
+                    let _ = DeleteObject(old.into());
+                }
+            }
+            unsafe {
+                SetWindowLongPtrW(
+                    *hwnd,
+                    GWLP_USERDATA,
+                    background.map_or(0, |brush| brush.0 as isize),
+                );
+                let _ = InvalidateRect(Some(*hwnd), None, true);
+            }
+        }
 
         // the shared children-diff skeleton with this platform's ops as
         // closures (no relayout flag needed here — arrange runs wholesale
@@ -516,7 +692,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 return LRESULT(0);
             }
             WM_DESTROY => PostQuitMessage(0),
-            WM_NCDESTROY => {
+            WM_GET_BG_BRUSH => {
+            // children of the root ask for its backdrop — the class brush
+            return LRESULT(GetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND) as isize);
+        }
+        WM_NCDESTROY => {
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                 drop(Box::from_raw(ptr as *mut Rc<RefCell<AppState>>));
             }
