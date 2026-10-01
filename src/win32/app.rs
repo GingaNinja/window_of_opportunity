@@ -24,7 +24,7 @@ use windows::{
     Win32::{
         Foundation::*,
         Graphics::Gdi::{
-            CreateSolidBrush, DeleteObject, FillRect, InvalidateRect, SetBkMode, HBRUSH, HDC,
+            CreateSolidBrush, DeleteObject, FillRect, HBRUSH, HDC, InvalidateRect, SetBkMode,
             TRANSPARENT,
         },
         System::LibraryLoader::GetModuleHandleW,
@@ -237,9 +237,7 @@ fn background_brush(hwnd: HWND) -> HBRUSH {
             return HBRUSH(own as *mut _);
         }
         match GetParent(hwnd) {
-            Ok(parent) => {
-                HBRUSH(SendMessageW(parent, WM_GET_BG_BRUSH, None, None).0 as *mut _)
-            }
+            Ok(parent) => HBRUSH(SendMessageW(parent, WM_GET_BG_BRUSH, None, None).0 as *mut _),
             Err(_) => HBRUSH::default(),
         }
     }
@@ -248,17 +246,24 @@ fn background_brush(hwnd: HWND) -> HBRUSH {
 /// The `wo_div` class proc: a Div paints its own background and lends its
 /// brush to children drawn on it. (Themed pushbuttons ignore
 /// WM_CTLCOLORBTN — our manifest-less classic controls honor it.)
-unsafe extern "system" fn divproc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+unsafe extern "system" fn divproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
         match msg {
             WM_NCCREATE => {
                 let cs = &*(lparam.0 as *const CREATESTRUCTW);
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize);
+            }
+            WM_COMMAND => {
+                // child controls report here: LOWORD(wparam) is the control id
+                // (== dispatch id), HIWORD the notification code
+                //let id = (wparam.0 & 0xffff) as usize; // if we need this for something other than a button click
+                let code = ((wparam.0 >> 16) & 0xffff) as u32;
+                if code == BN_CLICKED {
+                    // button clicks bubble up to the window
+                    if let Ok(parent_hwnd) = GetParent(hwnd) {
+                        return SendMessageW(parent_hwnd, WM_COMMAND, Some(wparam), Some(lparam));
+                    }
+                }
             }
             WM_ERASEBKGND => {
                 let hdc = HDC(wparam.0 as *mut _);
@@ -693,10 +698,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             WM_DESTROY => PostQuitMessage(0),
             WM_GET_BG_BRUSH => {
-            // children of the root ask for its backdrop — the class brush
-            return LRESULT(GetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND) as isize);
-        }
-        WM_NCDESTROY => {
+                // children of the root ask for its backdrop — the class brush
+                return LRESULT(GetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND) as isize);
+            }
+            WM_NCDESTROY => {
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                 drop(Box::from_raw(ptr as *mut Rc<RefCell<AppState>>));
             }
