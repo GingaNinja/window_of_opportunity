@@ -22,7 +22,7 @@ impl Component for Window {
                     { Div direction("row") gap(10.) height(60.) {
                         { Button { Text "Hello, and this should mean a bigger button" } }
                         { Button on_click(switch) { Text "Click to change the title" } }
-                        { Div width(80.) background("red") {} }
+                        { Div grow(true)  background("red") {} }
                     } }
                     { Div height(40.) background("green") {} }
                 } }
