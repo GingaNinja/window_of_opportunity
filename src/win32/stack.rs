@@ -19,7 +19,7 @@
 use windows::Win32::{
     Foundation::{HWND, SIZE},
     Graphics::Gdi::{GetDC, GetTextExtentPoint32W, ReleaseDC},
-    UI::WindowsAndMessaging::{GetParent, SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER},
+    UI::WindowsAndMessaging::{GetParent, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos},
 };
 
 use crate::{
@@ -31,7 +31,7 @@ use super::{util::get_utf16_vec, widgets::Widget};
 
 /// A layout box (client-area coordinates).
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Box2 {
+pub struct Rect {
     pub x: i32,
     pub y: i32,
     pub w: i32,
@@ -39,23 +39,22 @@ pub struct Box2 {
 }
 
 /// Arranges the tree inside `area`, positioning every leaf control.
-pub fn arrange(el: &Element, widget: &mut Widget, area: Box2) {
+pub fn arrange(el: &Element, widget: &mut Widget, area: Rect) {
     let style = FlexStyle::from_props(&el.props);
     let pad = style.padding as i32;
 
-    // a fixed size on the box itself wins over the area it was handed
+    // a fixed size on the box itself wins over the area it was handed, unless it's the window (if it can be resized)
     let (x, y) = (area.x, area.y);
-    let (w, h) = (
-        style.width.map(|w| w as i32).unwrap_or(area.w),
-        style.height.map(|h| h as i32).unwrap_or(area.h),
-    );
+    let (w, h) = if let ElementType::Window = el.element_type {
+        (area.w, area.h)
+    } else {
+        (
+            style.width.map(|w| w as i32).unwrap_or(area.w),
+            style.height.map(|h| h as i32).unwrap_or(area.h),
+        )
+    };
 
-    let Widget::Container {
-        hwnd,
-        children,
-        ..
-    } = widget
-    else {
+    let Widget::Container { hwnd, children, .. } = widget else {
         place(widget, x, y, w, h);
         return;
     };
@@ -66,7 +65,7 @@ pub fn arrange(el: &Element, widget: &mut Widget, area: Box2) {
 
     // children live in the container's CLIENT space, so the inner box is
     // 0-based no matter where the container sits in its own parent
-    let inner = Box2 {
+    let inner = Rect {
         x: pad,
         y: pad,
         w: w - 2 * pad,
@@ -103,8 +102,7 @@ pub fn arrange(el: &Element, widget: &mut Widget, area: Box2) {
         .rposition(|child| FlexStyle::from_props(&child.props).grow);
 
     let mut cursor = if main_is_row { inner.x } else { inner.y };
-    for (index, (child_el, child_widget)) in
-        el.children.iter().zip(children.iter_mut()).enumerate()
+    for (index, (child_el, child_widget)) in el.children.iter().zip(children.iter_mut()).enumerate()
     {
         let c_style = FlexStyle::from_props(&child_el.props);
         let (nw, nh) = naturals[index];
@@ -123,7 +121,16 @@ pub fn arrange(el: &Element, widget: &mut Widget, area: Box2) {
             (inner.x, cursor, bw, bh)
         };
 
-        arrange(child_el, child_widget, Box2 { x: bx, y: by, w: bw, h: bh });
+        arrange(
+            child_el,
+            child_widget,
+            Rect {
+                x: bx,
+                y: by,
+                w: bw,
+                h: bh,
+            },
+        );
         cursor += (if main_is_row { bw } else { bh }) + gap;
     }
 }

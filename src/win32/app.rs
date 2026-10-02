@@ -41,7 +41,7 @@ use crate::{
 };
 
 use super::{
-    stack::{self, Box2},
+    stack::{self, Rect},
     util::{get_utf16_vec, load_cursor, load_icon},
     widgets::{self, Widget},
 };
@@ -399,7 +399,7 @@ impl AppState {
             stack::arrange(
                 &tree,
                 widget,
-                Box2 {
+                Rect {
                     x: 0,
                     y: 0,
                     w: rect.right - rect.left,
