@@ -31,7 +31,12 @@ pub enum Widget {
         /// the cacao side
         handler_id: Option<usize>,
     },
-    Label { hwnd: HWND },
+    Input {
+        hwnd: HWND,
+    },
+    Label {
+        hwnd: HWND,
+    },
 }
 
 /// Which neutral widget flavor is this — the platform half of the
@@ -42,6 +47,7 @@ impl Widget {
             Widget::Container { .. } => WidgetKind::Container,
             Widget::Button { .. } => WidgetKind::Button,
             Widget::Label { .. } => WidgetKind::Label,
+            Widget::Input { .. } => WidgetKind::Input,
         }
     }
 }
@@ -54,13 +60,11 @@ impl Widget {
 impl Drop for Widget {
     fn drop(&mut self) {
         match self {
-            Widget::Button { hwnd, .. } | Widget::Label { hwnd } => unsafe {
+            Widget::Button { hwnd, .. } | Widget::Label { hwnd } | Widget::Input { hwnd } => unsafe {
                 let _ = DestroyWindow(*hwnd);
             },
             Widget::Container {
-                hwnd,
-                background,
-                ..
+                hwnd, background, ..
             } => unsafe {
                 if GetParent(*hwnd).is_ok() {
                     let _ = DestroyWindow(*hwnd);

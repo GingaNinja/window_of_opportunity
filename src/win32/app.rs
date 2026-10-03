@@ -28,7 +28,7 @@ use windows::{
             TRANSPARENT,
         },
         System::LibraryLoader::GetModuleHandleW,
-        UI::WindowsAndMessaging::*,
+        UI::{Controls::EM_GETLINE, WindowsAndMessaging::*},
     },
     core::*,
 };
@@ -258,7 +258,7 @@ unsafe extern "system" fn divproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 // (== dispatch id), HIWORD the notification code
                 //let id = (wparam.0 & 0xffff) as usize; // if we need this for something other than a button click
                 let code = ((wparam.0 >> 16) & 0xffff) as u32;
-                if code == BN_CLICKED {
+                if code == BN_CLICKED || code == EN_CHANGE {
                     // button clicks bubble up to the window
                     if let Ok(parent_hwnd) = GetParent(hwnd) {
                         return SendMessageW(parent_hwnd, WM_COMMAND, Some(wparam), Some(lparam));
@@ -450,7 +450,9 @@ impl AppState {
                 // back. (16-bit payload: 65k handlers per window is plenty
                 // for now; a lookup table is the fix if it ever isn't.)
                 let handler_id = match el.handlers.get("on_click") {
-                    Some(Handler::Simple(event)) => Some(self.handlers.register(event)),
+                    Some(Handler::Simple(event)) => {
+                        Some(self.handlers.register(&Handler::Simple(event.clone())))
+                    }
                     _ => None,
                 };
                 let id = handler_id.unwrap_or(NO_HANDLER_ID);
@@ -466,8 +468,21 @@ impl AppState {
                     handler_id,
                 }
             }
-            ElementType::Input | ElementType::Image | ElementType::List => {
-                todo!("win32 step 2: Input/Image/List land next")
+            ElementType::Input => {
+                let handler_id = match el.handlers.get("on_change") {
+                    Some(Handler::Change(handler)) => {
+                        Some(self.handlers.register(&Handler::Change(handler.clone())))
+                    }
+                    _ => None,
+                };
+                let id = handler_id.unwrap_or(NO_HANDLER_ID);
+                debug_assert!(id <= 0xffff, "dispatch id must fit WM_COMMAND's 16 bits");
+                Widget::Input {
+                    hwnd: self.create_control(w!("EDIT"), "", WS_BORDER.0, parent, id),
+                }
+            }
+            ElementType::Image | ElementType::List => {
+                todo!("win32: Image/List not yet implemented")
             }
             ElementType::Component(_) => {
                 unreachable!("component elements are expanded before mounting")
@@ -545,11 +560,12 @@ impl AppState {
                 }
                 // refresh the handler under the same dispatch id — the
                 // control keeps firing this id while the handler stays current
-                if let Some(Handler::Simple(event)) = new_el.handlers.get("on_click") {
+                let on_click = new_el.handlers.get("on_click");
+                if let Some(Handler::Simple(event)) = on_click {
                     match handler_id {
-                        Some(id) => self.handlers.refresh(*id, event),
+                        Some(id) => self.handlers.refresh(*id, on_click.unwrap()),
                         None => {
-                            let id = self.handlers.register(event);
+                            let id = self.handlers.register(on_click.unwrap());
                             debug_assert!(id <= 0xffff);
                             unsafe {
                                 let _ = SetWindowLongPtrW(*hwnd, GWLP_ID, id as isize);
@@ -566,6 +582,7 @@ impl AppState {
                     let _ = SetWindowTextW(*hwnd, PCWSTR(title.as_ptr()));
                 }
             }
+            (Widget::Input { hwnd }, ElementType::Input) => {}
             // the caller only patches compatible pairs
             _ => unreachable!("patch called on an incompatible widget/element pair"),
         }
@@ -631,9 +648,17 @@ impl AppState {
 /// The React loop's win32 shape: fire the handler for a dispatch id, then
 /// re-render. `try_borrow` because messages can arrive mid-render (our own
 /// SetWindowPos fires WM_SIZE synchronously) — a render in flight wins.
-fn fire_and_render(app: &RefCell<AppState>, id: usize) {
+fn fire_and_render_simple(app: &RefCell<AppState>, id: usize) {
     if let Ok(mut app) = app.try_borrow_mut() {
-        if app.handlers.fire(id, &app.state) {
+        if app.handlers.fire_simple(id, &app.state) {
+            app.render();
+        }
+    }
+}
+
+fn fire_and_render_text_change(app: &RefCell<AppState>, id: usize, new_text: String) {
+    if let Ok(mut app) = app.try_borrow_mut() {
+        if app.handlers.fire_text_change(id, &app.state, new_text) {
             app.render();
         }
     }
@@ -663,12 +688,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let id = (wparam.0 & 0xffff) as usize;
                 let code = ((wparam.0 >> 16) & 0xffff) as u32;
                 if code == BN_CLICKED {
-                    fire_and_render(app, id);
+                    fire_and_render_simple(app, id);
                     return LRESULT(0);
+                }
+                if code == EN_CHANGE {
+                    let new_line = get_edit_line(HWND(lparam.0 as *mut std::ffi::c_void), 0);
+                    fire_and_render_text_change(app, id, new_line);
                 }
             }
             WM_APP_EVENT => {
-                fire_and_render(app, wparam.0 as usize);
+                fire_and_render_simple(app, wparam.0 as usize);
                 return LRESULT(0);
             }
             WM_APP_MSG => {
@@ -708,5 +737,32 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             _ => {}
         }
         DefWindowProcW(hwnd, msg, wparam, lparam)
+    }
+}
+
+unsafe fn get_edit_line(hwnd_edit: HWND, line_index: usize) -> String {
+    const MAX_LEN: usize = 256;
+    // Create a buffer of 16-bit wide characters (UTF-16)
+    let mut buffer: [u16; MAX_LEN] = [0; MAX_LEN];
+
+    // Write the buffer size (in u16 elements) into the first word (u16)
+    buffer[0] = MAX_LEN as u16;
+
+    // Send the message. EM_GETLINE returns the number of copied characters.
+    let count = unsafe {
+        SendMessageW(
+            hwnd_edit,
+            EM_GETLINE,
+            Some(WPARAM(line_index)),
+            Some(LPARAM(buffer.as_mut_ptr() as isize)),
+        )
+        .0 as usize
+    };
+
+    if count > 0 {
+        // Slice the buffer up to the returned count and convert to a Rust String
+        String::from_utf16_lossy(&buffer[..count])
+    } else {
+        String::new()
     }
 }

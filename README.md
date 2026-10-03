@@ -7,7 +7,7 @@ Currently targetting Macos with AppKit (using Cacao under the hood), but wanting
 ## Features
 
 * Input boxes support internationalization because they are the native input boxes.
-* Small binaries - the todos example compiles to 1.3Mb in release.
+* Small binaries - the todos example compiles to 291kb for Windows, and 1.3Mb for Mac, in release.
 
 ## Getting started
 
@@ -60,12 +60,13 @@ Note, hardly anything works, but creating a basic application is possible, and t
 | Image (using BlitFrame) |  ✅ | ❌ | ❌ |
 | Input |  ✅ | ❌ | ❌ |
 | Window |  ✅ | ✅ | ❌ |
-| Window resizing |  ✅ | ❌ | ❌ |
+| Window resizing |  ✅ | ✅ | ❌ |
 | Window title |  ✅ | ✅ | ❌ |
 | Layout |  ✅ | ✅ | ❌ |
 | List | ✅ | ❌ | ❌ |
 | Test target | ❌ | ❌ | ❌ |
 
+* Move to directly use objc2 for Macos
 * Handle vec based lists
 * Add more elements - scrollviews, radiobuttons, comboboxes, selectboxes.
 * Add more properties - border, rounded corners, other events
