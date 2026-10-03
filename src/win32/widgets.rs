@@ -11,7 +11,11 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{DestroyWindow, GetParent},
 };
 
-use crate::{element::Element, reconcile::WidgetKind};
+use crate::{
+    element::Element,
+    reconcile::WidgetKind,
+    state::{Event, Handler},
+};
 
 pub enum Widget {
     /// Window/Div: a real child window (the `wo_div` class) — it paints its
@@ -26,13 +30,18 @@ pub enum Widget {
     },
     Button {
         hwnd: HWND,
-        /// the dispatch id of the wired on_click — also this control's child
-        /// id (what WM_COMMAND carries back), stable across re-renders like
-        /// the cacao side
-        handler_id: Option<usize>,
+        /// the on_click handler, OWNED by the widget (the InputDelegate
+        /// model) — WM_COMMAND's lparam is this hwnd, so the event source
+        /// resolves itself; no dispatch ids on win32
+        on_click: Option<Event>,
     },
     Input {
         hwnd: HWND,
+        /// The on_change handler, OWNED by the widget — the InputDelegate
+        /// model. Payload-carrying events live with their widget (the text
+        /// comes from the control at fire time); the id registry is for
+        /// payload-free dispatch.
+        on_change: Option<Handler>,
     },
     Label {
         hwnd: HWND,
@@ -60,7 +69,9 @@ impl Widget {
 impl Drop for Widget {
     fn drop(&mut self) {
         match self {
-            Widget::Button { hwnd, .. } | Widget::Label { hwnd } | Widget::Input { hwnd } => unsafe {
+            Widget::Button { hwnd, .. }
+            | Widget::Label { hwnd }
+            | Widget::Input { hwnd, .. } => unsafe {
                 let _ = DestroyWindow(*hwnd);
             },
             Widget::Container {

@@ -181,7 +181,7 @@ pub fn natural(el: &Element, widget: &Widget) -> (i32, i32) {
 
 fn place(widget: &Widget, x: i32, y: i32, w: i32, h: i32) {
     let hwnd = match widget {
-        Widget::Button { hwnd, .. } | Widget::Label { hwnd } | Widget::Input { hwnd } => *hwnd,
+        Widget::Button { hwnd, .. } | Widget::Label { hwnd } | Widget::Input { hwnd, .. } => *hwnd,
         Widget::Container { .. } => return,
     };
     place_hwnd(hwnd, x, y, w, h);

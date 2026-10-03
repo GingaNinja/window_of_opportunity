@@ -5,7 +5,7 @@
 // docs/win32-port-notes.md):
 //
 //   did_finish_launching  → the sequence in `run` after CreateWindowExW
-//   Dispatcher (Message<M>) → WM_APP_EVENT / WM_APP_MSG + `dispatch`
+//   Dispatcher (Message<M>) → WM_APP_MSG + `dispatch`
 //   WindowProxy.did_resize → WM_SIZE
 //
 // Step-2 scope: Window/Div/Button/Text. Input/Image/List land next (their
@@ -28,7 +28,7 @@ use windows::{
             TRANSPARENT,
         },
         System::LibraryLoader::GetModuleHandleW,
-        UI::{Controls::EM_GETLINE, WindowsAndMessaging::*},
+        UI::{Controls::EM_SETCUEBANNER, WindowsAndMessaging::*},
     },
     core::*,
 };
@@ -37,7 +37,7 @@ use crate::{
     component::Component,
     element::{Element, ElementType, PropType, button_label, window_spec},
     reconcile,
-    state::{Ctx, Handler, Handlers, State},
+    state::{Ctx, Event, Handler, Handlers, State},
 };
 
 use super::{
@@ -49,9 +49,9 @@ use super::{
 /// Shared with every backend — the semantics live on `state::Message`.
 pub use crate::state::Message;
 
-/// Widget events ride the queue as `WM_APP + 1` (wparam = dispatch id);
-/// app messages as `WM_APP + 2` (lparam = `Box<dyn Any + Send>`).
-const WM_APP_EVENT: u32 = WM_APP + 1;
+/// App messages ride the queue as `WM_APP + 2` (lparam =
+/// `Box<dyn Any + Send>`). Widget events need no queue at all — WM_COMMAND
+/// arrives in-loop and resolves by hwnd.
 const WM_APP_MSG: u32 = WM_APP + 2;
 /// "what brush do you paint with?" — asked by undecorated divs that
 /// inherit their parent's backdrop (the transparent-NSView behavior)
@@ -59,11 +59,6 @@ const WM_GET_BG_BRUSH: u32 = WM_APP + 3;
 
 const CLASS_NAME: PCWSTR = w!("wo_mainwin");
 const DIV_CLASS: PCWSTR = w!("wo_div");
-
-/// Control id for "this control has no handler" — also win32's NULL HMENU
-/// (id 0 = "no identifier"). Dispatch ids start at 1 (see
-/// `Handlers::default`), so the two spaces can't collide.
-const NO_HANDLER_ID: usize = 0;
 
 /// The main window, so `dispatch` works from any thread (PostMessage is
 /// thread-safe and lands on the message-loop thread).
@@ -312,9 +307,11 @@ pub(crate) struct AppState {
     /// the previous render's expanded element tree — the diff target
     last_tree: Option<Box<Element>>,
     hwnd: HWND,
-    // NOTE: unlike the cacao side there's no `dispatch_event` closure here:
-    // widget events arrive as WM_COMMAND already on the loop thread, so the
-    // queue hop is redundant. Cross-thread talk goes through `dispatch`.
+    // NOTE: widget events resolve by hwnd through the widget tree (handlers
+    // live on their widgets) — no dispatch ids, no queue hop. The cacao
+    // side needs its id registry only because objc action closures must be
+    // Send (see docs/objc2-migration-notes.md). Cross-thread talk goes
+    // through `dispatch`.
     /// app messages arrive erased (so AppState stays non-generic); the
     /// adapter built in `run` downcasts them back to M
     on_app_message: Box<dyn Fn(&State, Box<dyn Any + Send>)>,
@@ -443,42 +440,41 @@ impl AppState {
                 // SS_LEFT is literally the empty style bits (left-aligned is
                 // a static's default) — pass 0 and skip the SystemServices
                 // feature just for a zero constant
-                hwnd: self.create_control(w!("static"), text, 0, parent, NO_HANDLER_ID),
+                hwnd: self.create_control(w!("static"), text, 0, parent),
             },
             ElementType::Button => {
-                // The dispatch id IS the control id — WM_COMMAND carries it
-                // back. (16-bit payload: 65k handlers per window is plenty
-                // for now; a lookup table is the fix if it ever isn't.)
-                let handler_id = match el.handlers.get("on_click") {
-                    Some(Handler::Simple(event)) => {
-                        Some(self.handlers.register(&Handler::Simple(event.clone())))
-                    }
-                    _ => None,
-                };
-                let id = handler_id.unwrap_or(NO_HANDLER_ID);
-                debug_assert!(id <= 0xffff, "dispatch id must fit WM_COMMAND's 16 bits");
+                // Handlers live on widgets (the InputDelegate model,
+                // everywhere): WM_COMMAND's lparam IS the control's hwnd, so
+                // the event source resolves itself. The cacao side's id
+                // registry exists only for its Send boundary.
                 Widget::Button {
                     hwnd: self.create_control(
                         w!("button"),
                         &button_label(el),
                         BS_PUSHBUTTON as u32,
                         parent,
-                        id,
                     ),
-                    handler_id,
+                    on_click: match el.handlers.get("on_click") {
+                        Some(Handler::Simple(event)) => Some(event.clone()),
+                        _ => None,
+                    },
                 }
             }
             ElementType::Input => {
-                let handler_id = match el.handlers.get("on_change") {
-                    Some(Handler::Change(handler)) => {
-                        Some(self.handlers.register(&Handler::Change(handler.clone())))
-                    }
-                    _ => None,
-                };
-                let id = handler_id.unwrap_or(NO_HANDLER_ID);
-                debug_assert!(id <= 0xffff, "dispatch id must fit WM_COMMAND's 16 bits");
+                // Like the macOS InputDelegate: the widget OWNS its
+                // on_change handler. Payload-carrying events live with their
+                // widget (the text comes from the control at fire time); the
+                // id registry is for payload-free dispatch.
+                let hwnd = self.create_control(w!("EDIT"), "", WS_BORDER.0, parent);
+                if let Some(value) = el.props.get_string(PropType::Value) {
+                    set_window_text(hwnd, value);
+                }
+                if let Some(cue) = el.props.get_string(PropType::Placeholder) {
+                    set_cue_banner(hwnd, cue);
+                }
                 Widget::Input {
-                    hwnd: self.create_control(w!("EDIT"), "", WS_BORDER.0, parent, id),
+                    hwnd,
+                    on_change: el.handlers.get("on_change").cloned(),
                 }
             }
             ElementType::Image | ElementType::List => {
@@ -521,7 +517,6 @@ impl AppState {
         text: &str,
         style: u32,
         parent: HWND,
-        id: usize,
     ) -> HWND {
         let text_wide = get_utf16_vec(text);
         unsafe {
@@ -535,7 +530,7 @@ impl AppState {
                 10,
                 10, // arrange() positions it before anything is visible
                 Some(parent),
-                Some(HMENU(id as isize as *mut _)), // for a child, hmenu IS its control id
+                None, // child id: unused — events resolve by hwnd
                 Some(HINSTANCE(GetModuleHandleW(None).unwrap().0)),
                 None,
             )
@@ -550,7 +545,7 @@ impl AppState {
             (widget @ Widget::Container { .. }, ElementType::Window | ElementType::Div) => {
                 self.patch_container(widget, old_el, new_el);
             }
-            (Widget::Button { hwnd, handler_id }, ElementType::Button) => {
+            (Widget::Button { hwnd, on_click }, ElementType::Button) => {
                 // reconcile the title
                 if button_label(old_el) != button_label(new_el) {
                     let title = get_utf16_vec(&button_label(new_el));
@@ -558,22 +553,12 @@ impl AppState {
                         let _ = SetWindowTextW(*hwnd, PCWSTR(title.as_ptr()));
                     }
                 }
-                // refresh the handler under the same dispatch id — the
-                // control keeps firing this id while the handler stays current
-                let on_click = new_el.handlers.get("on_click");
-                if let Some(Handler::Simple(event)) = on_click {
-                    match handler_id {
-                        Some(id) => self.handlers.refresh(*id, on_click.unwrap()),
-                        None => {
-                            let id = self.handlers.register(on_click.unwrap());
-                            debug_assert!(id <= 0xffff);
-                            unsafe {
-                                let _ = SetWindowLongPtrW(*hwnd, GWLP_ID, id as isize);
-                            }
-                            *handler_id = Some(id);
-                        }
-                    }
-                }
+                // the handler is a widget field now — a write keeps it
+                // current (the cacao side's registry-refresh, deleted)
+                *on_click = match new_el.handlers.get("on_click") {
+                    Some(Handler::Simple(event)) => Some(event.clone()),
+                    _ => None,
+                };
             }
             (Widget::Label { hwnd }, ElementType::Text(text)) => {
                 // display-only: no cursor to protect, just refresh
@@ -582,7 +567,30 @@ impl AppState {
                     let _ = SetWindowTextW(*hwnd, PCWSTR(title.as_ptr()));
                 }
             }
-            (Widget::Input { hwnd }, ElementType::Input) => {}
+            (Widget::Input { hwnd, on_change }, ElementType::Input) => {
+                // controlled value: write only what actually differs — the
+                // caret must never move under the user (same contract as the
+                // cacao side)
+                if old_el.props.get_string(PropType::Value)
+                    != new_el.props.get_string(PropType::Value)
+                {
+                    if let Some(value) = new_el.props.get_string(PropType::Value) {
+                        if get_window_text(*hwnd) != value {
+                            set_window_text(*hwnd, value);
+                        }
+                    }
+                }
+                if old_el.props.get_string(PropType::Placeholder)
+                    != new_el.props.get_string(PropType::Placeholder)
+                {
+                    if let Some(cue) = new_el.props.get_string(PropType::Placeholder) {
+                        set_cue_banner(*hwnd, cue);
+                    }
+                }
+                // the handler lives on the widget now — refreshing it is a
+                // field write (it's always current, same as the delegate)
+                *on_change = new_el.handlers.get("on_change").cloned();
+            }
             // the caller only patches compatible pairs
             _ => unreachable!("patch called on an incompatible widget/element pair"),
         }
@@ -645,22 +653,61 @@ impl AppState {
     }
 }
 
-/// The React loop's win32 shape: fire the handler for a dispatch id, then
-/// re-render. `try_borrow` because messages can arrive mid-render (our own
-/// SetWindowPos fires WM_SIZE synchronously) — a render in flight wins.
-fn fire_and_render_simple(app: &RefCell<AppState>, id: usize) {
+/// BN_CLICKED: the widget owns the handler (same as Input) — find it by its
+/// control's hwnd and run it, then re-render. `try_borrow` because messages
+/// can arrive mid-render (our own SetWindowPos fires WM_SIZE synchronously)
+/// — a render in flight wins.
+fn click_and_render(app: &RefCell<AppState>, button: HWND) {
     if let Ok(mut app) = app.try_borrow_mut() {
-        if app.handlers.fire_simple(id, &app.state) {
+        let handler = app
+            .root_widget
+            .as_mut()
+            .and_then(|root| find_button_handler(root, button));
+        if let Some(event) = handler {
+            event.fire(&app.state);
             app.render();
         }
     }
 }
 
-fn fire_and_render_text_change(app: &RefCell<AppState>, id: usize, new_text: String) {
+fn find_button_handler(widget: &mut Widget, hwnd: HWND) -> Option<Event> {
+    match widget {
+        Widget::Button {
+            hwnd: h,
+            on_click,
+        } if *h == hwnd => on_click.clone(),
+        Widget::Container { children, .. } => {
+            children.iter_mut().find_map(|child| find_button_handler(child, hwnd))
+        }
+        _ => None,
+    }
+}
+
+/// EN_CHANGE: the widget owns the handler (the InputDelegate model) — find
+/// it by its control's hwnd and run it with the text the control holds.
+fn text_change_and_render(app: &RefCell<AppState>, edit: HWND) {
     if let Ok(mut app) = app.try_borrow_mut() {
-        if app.handlers.fire_text_change(id, &app.state, new_text) {
+        let handler = app
+            .root_widget
+            .as_mut()
+            .and_then(|root| find_input_handler(root, edit));
+        if let Some(Handler::Change(handler)) = handler {
+            handler(&app.state, get_window_text(edit));
             app.render();
         }
+    }
+}
+
+fn find_input_handler(widget: &mut Widget, hwnd: HWND) -> Option<Handler> {
+    match widget {
+        Widget::Input {
+            hwnd: h,
+            on_change,
+        } if *h == hwnd => on_change.clone(),
+        Widget::Container { children, .. } => {
+            children.iter_mut().find_map(|child| find_input_handler(child, hwnd))
+        }
+        _ => None,
     }
 }
 
@@ -683,22 +730,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
         match msg {
             WM_COMMAND => {
-                // child controls report here: LOWORD(wparam) is the control id
-                // (== dispatch id), HIWORD the notification code
-                let id = (wparam.0 & 0xffff) as usize;
+                // child controls report here; lparam is the control's hwnd —
+                // the event source identifies itself, so handlers resolve
+                // through the widget tree and no dispatch id is involved
                 let code = ((wparam.0 >> 16) & 0xffff) as u32;
                 if code == BN_CLICKED {
-                    fire_and_render_simple(app, id);
+                    click_and_render(app, HWND(lparam.0 as *mut _));
                     return LRESULT(0);
                 }
                 if code == EN_CHANGE {
-                    let new_line = get_edit_line(HWND(lparam.0 as *mut std::ffi::c_void), 0);
-                    fire_and_render_text_change(app, id, new_line);
+                    text_change_and_render(app, HWND(lparam.0 as *mut _));
+                    return LRESULT(0);
                 }
-            }
-            WM_APP_EVENT => {
-                fire_and_render_simple(app, wparam.0 as usize);
-                return LRESULT(0);
             }
             WM_APP_MSG => {
                 // the app-side half of the Send boundary (see `dispatch`)
@@ -740,29 +783,35 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     }
 }
 
-unsafe fn get_edit_line(hwnd_edit: HWND, line_index: usize) -> String {
-    const MAX_LEN: usize = 256;
-    // Create a buffer of 16-bit wide characters (UTF-16)
-    let mut buffer: [u16; MAX_LEN] = [0; MAX_LEN];
+/// Sets a window's text from a Rust string.
+fn set_window_text(hwnd: HWND, text: &str) {
+    let wide = get_utf16_vec(text);
+    unsafe {
+        let _ = SetWindowTextW(hwnd, PCWSTR(wide.as_ptr()));
+    }
+}
 
-    // Write the buffer size (in u16 elements) into the first word (u16)
-    buffer[0] = MAX_LEN as u16;
+/// The placeholder cue (EM_SETCUEBANNER). Silently absent on pre-comctl32-6
+/// setups — acceptable for a placeholder.
+fn set_cue_banner(hwnd: HWND, text: &str) {
+    let wide = get_utf16_vec(text);
+    unsafe {
+        let _ = SendMessageW(
+            hwnd,
+            EM_SETCUEBANNER,
+            Some(WPARAM(1)),
+            Some(LPARAM(wide.as_ptr() as isize)),
+        );
+    }
+}
 
-    // Send the message. EM_GETLINE returns the number of copied characters.
-    let count = unsafe {
-        SendMessageW(
-            hwnd_edit,
-            EM_GETLINE,
-            Some(WPARAM(line_index)),
-            Some(LPARAM(buffer.as_mut_ptr() as isize)),
-        )
-        .0 as usize
-    };
-
-    if count > 0 {
-        // Slice the buffer up to the returned count and convert to a Rust String
-        String::from_utf16_lossy(&buffer[..count])
-    } else {
-        String::new()
+/// A control's full text, unbounded (the EM_GETLINE dance this replaces
+/// capped at 256 chars and needed a length-prefix buffer).
+fn get_window_text(hwnd: HWND) -> String {
+    unsafe {
+        let len = GetWindowTextLengthW(hwnd) as usize;
+        let mut buffer = vec![0u16; len + 1];
+        let n = GetWindowTextW(hwnd, &mut buffer) as usize;
+        String::from_utf16_lossy(&buffer[..n])
     }
 }

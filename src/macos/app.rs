@@ -209,7 +209,8 @@ impl AppState {
 
         // hand the root's on_resize (if any) to the window proxy — resizes
         // flow through component logic, not a magic state key
-        self.handlers.set_resize_handler(tree.handlers.get("on_resize").cloned());
+        self.handlers
+            .set_resize_handler(tree.handlers.get("on_resize").cloned());
 
         // focus snapshot before reconciling (position + field pointer)
         let focus = self.focused_snapshot();

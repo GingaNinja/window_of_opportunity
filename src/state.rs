@@ -84,22 +84,9 @@ impl Debug for Handler {
     }
 }
 
-// #[derive(Clone)]
+/// An on_change handler: |state, text| — like `ResizeHandler`, it arrives
+/// with data, so it lives with its widget rather than the id registry.
 type TextChange = Rc<dyn Fn(&State, String)>;
-
-// impl TextChange {
-//     /// Runs the event against state. Runs on the main thread, from the
-//     /// dispatcher.
-//     pub fn fire(&self, state: &State, new_text: String) {
-//         (self.0)(state, new_text)
-//     }
-// }
-
-// impl Debug for TextChange {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         f.write_str("<event>")
-//     }
-// }
 
 /// An on_resize handler: |state, w, h| — runs against state on every
 /// resize tick with the new usable size, followed by a re-render.
@@ -153,7 +140,7 @@ pub enum Message<M> {
 /// mounted handler per render — fine for now, prune it when diffing
 /// catches up.)
 pub struct Handlers {
-    by_id: RefCell<HashMap<usize, Handler>>,
+    by_id: RefCell<HashMap<usize, Event>>,
     next_id: Cell<usize>,
 
     /// the root element's on_resize handler, if it declared one — handed to
@@ -183,7 +170,7 @@ impl Handlers {
 
     /// Stores an event under a fresh dispatch id and returns it. Ids are
     /// dense and increasing, never 0 (see `Default`).
-    pub fn register(&self, event: &Handler) -> usize {
+    pub fn register(&self, event: &Event) -> usize {
         let id = self.next_id.replace(self.next_id.get() + 1);
         self.by_id.borrow_mut().insert(id, event.clone());
         id
@@ -191,33 +178,23 @@ impl Handlers {
 
     /// Re-stores the handler under an existing dispatch id — the widget's
     /// action closure keeps firing this id while the handler stays current.
-    pub fn refresh(&self, id: usize, event: &Handler) {
+    pub fn refresh(&self, id: usize, event: &Event) {
         self.by_id.borrow_mut().insert(id, event.clone());
     }
 
     /// The live handler for a dispatch id, if it's still around.
-    pub fn event(&self, id: usize) -> Option<Handler> {
+    pub fn event(&self, id: usize) -> Option<Event> {
         self.by_id.borrow().get(&id).cloned()
     }
 
     /// Fires the handler for a dispatch id — false if the id is stale.
-    pub fn fire_simple(&self, id: usize, state: &State) -> bool {
+    pub fn fire(&self, id: usize, state: &State) -> bool {
         match self.event(id) {
-            Some(Handler::Simple(event)) => {
+            Some(event) => {
                 event.fire(state);
                 true
             }
-            _ => false,
-        }
-    }
-
-    pub fn fire_text_change(&self, id: usize, state: &State, new_text: String) -> bool {
-        match self.event(id) {
-            Some(Handler::Change(event)) => {
-                event(state, new_text);
-                true
-            }
-            _ => false,
+            None => false,
         }
     }
 
@@ -269,25 +246,25 @@ mod tests {
 
         let fired = Rc::new(RefCell::new(0));
         let f = fired.clone();
-        let event = Handler::Simple(Event(Rc::new(move |_| *f.borrow_mut() += 1)));
+        let event = Event(Rc::new(move |_| *f.borrow_mut() += 1));
 
         let id = handlers.register(&event);
-        assert!(handlers.fire_simple(id, &state));
+        assert!(handlers.fire(id, &state));
         assert_eq!(*fired.borrow(), 1);
 
         // refresh keeps the id stable but the handler current
         let f = fired.clone();
-        let fresh = Handler::Simple(Event(Rc::new(move |_| *f.borrow_mut() += 10)));
+        let fresh = Event(Rc::new(move |_| *f.borrow_mut() += 10));
         handlers.refresh(id, &fresh);
-        assert!(handlers.fire_simple(id, &state));
+        assert!(handlers.fire(id, &state));
         assert_eq!(*fired.borrow(), 11, "the refreshed handler ran");
 
         // stale id is refused, not panicked
-        assert!(!handlers.fire_simple(999, &state));
+        assert!(!handlers.fire(999, &state));
 
         // the root's on_resize rides along in the same bookkeeping
         assert!(handlers.resize_handler().is_none());
-        handlers.set_resize_handler(Some(event));
+        handlers.set_resize_handler(Some(Handler::Simple(event)));
         assert!(matches!(
             handlers.resize_handler(),
             Some(Handler::Simple(_))
@@ -297,7 +274,7 @@ mod tests {
     #[test]
     fn dispatch_ids_never_collide_with_the_no_handler_sentinel() {
         let handlers = Handlers::new();
-        let event = Handler::Simple(Event(Rc::new(|_| {})));
+        let event = Event(Rc::new(|_| {}));
 
         let first = handlers.register(&event);
         let second = handlers.register(&event);
