@@ -171,11 +171,13 @@ pub fn natural(el: &Element, widget: &Widget) -> (i32, i32) {
             }
         }
         (Widget::List { rows, .. }, _) => {
-            // Until the row-height/painting work lands, rows use the default
+            // Until the row-height work lands, rows use the default
             // report-row height (one system-font line) — the size the
             // ListView actually paints at, so the item count is visible.
-            // Replace with measured rows when painting lands (see the TODO
-            // in patch's List arm).
+            // Replace with rows.len() * measured height once the tallest
+            // row lands on the widget (see the row-height TODO in patch's
+            // List arm — the small-image-list trick sets the control's
+            // uniform row height).
             const ROW_HEIGHT: i32 = 18;
             (80, rows.len() as i32 * ROW_HEIGHT + 2)
         }

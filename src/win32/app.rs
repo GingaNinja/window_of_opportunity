@@ -743,8 +743,12 @@ impl AppState {
                 unsafe {
                     SendMessageW(*hwnd, LVM_SETITEMCOUNT, Some(WPARAM(rows.len())), None);
                 }
-                // TODO(painting): row height — measure the tallest snapshot
-                // row and apply the LVM_SETICONSPACING row-height hack.
+                // TODO(row height): measure the tallest snapshot row
+                // (paint::natural_size) and push it to the control via the
+                // small-image-list trick (LVM_SETIMAGELIST LVSIL_SMALL with
+                // a bitmap of that height — the ObjectListView trick; rows
+                // are uniform in report view), then store it on the widget
+                // so stack::natural reads the same number.
             }
             // the caller only patches compatible pairs
             _ => unreachable!("patch called on an incompatible widget/element pair"),
