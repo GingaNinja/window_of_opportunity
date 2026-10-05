@@ -24,8 +24,8 @@ use windows::{
     Win32::{
         Foundation::*,
         Graphics::Gdi::{
-            CreateSolidBrush, DT_SINGLELINE, DeleteObject, DrawTextW, FillRect, HBRUSH, HDC,
-            InvalidateRect, SetBkMode, SetTextColor, TRANSPARENT,
+            CreateSolidBrush, DeleteObject, FillRect, HBRUSH, HDC, InvalidateRect, SetBkMode,
+            TRANSPARENT,
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::{
@@ -49,10 +49,10 @@ use crate::{
     element::{Element, ElementType, PropType, button_label, window_spec},
     reconcile,
     state::{Ctx, Event, Handler, Handlers, State},
-    win32::dc::DeviceContext,
 };
 
 use super::{
+    paint,
     stack::{self, Rect},
     util::{get_utf16_vec, load_cursor, load_icon},
     widgets::{self, Widget},
@@ -315,7 +315,7 @@ unsafe extern "system" fn divproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 /// Windows color mapping — the Apple system (light) colors the cacao
 /// `color()` uses, as COLORREF (0x00BBGGRR), so the same ui! code looks
 /// right on both platforms.
-fn color_ref(name: &str) -> COLORREF {
+pub(crate) fn color_ref(name: &str) -> COLORREF {
     match name {
         "blue" => COLORREF(0x00FF_7A00),  // rgb(0, 122, 255)
         "red" => COLORREF(0x0030_3BFF),   // rgb(255, 59, 48)
@@ -325,7 +325,7 @@ fn color_ref(name: &str) -> COLORREF {
     }
 }
 
-fn color_brush(name: &str) -> HBRUSH {
+pub(crate) fn color_brush(name: &str) -> HBRUSH {
     unsafe { CreateSolidBrush(color_ref(name)) }
 }
 
@@ -811,7 +811,6 @@ fn find_input_handler(widget: &mut Widget, hwnd: HWND) -> Option<Handler> {
 
 /// The snapshot rows for the list with this hwnd — the datasource the
 /// painting work draws from.
-#[allow(dead_code)] // consumed by the row-painting work
 fn find_list_rows(widget: &mut Widget, hwnd: HWND) -> Option<&Vec<Box<Element>>> {
     match widget {
         Widget::List { hwnd: h, rows } if *h == hwnd => Some(rows),
@@ -843,7 +842,6 @@ fn sync_list_columns(widget: &Widget) {
 /// WM_NOTIFY from a child control. The custom-draw stage chain is the
 /// seam where row painting plugs in — the plumbing is here, the pixels
 /// are yours.
-#[allow(unused_variables)] // `app` is the painting work's entry to the snapshot
 fn notify(app: &RefCell<AppState>, lparam: LPARAM) -> LRESULT {
     unsafe {
         let hdr = &*(lparam.0 as *const NMHDR);
@@ -865,6 +863,9 @@ fn notify(app: &RefCell<AppState>, lparam: LPARAM) -> LRESULT {
                         LRESULT((CDRF_NOTIFYPOSTPAINT | CDRF_NOTIFYPOSTERASE) as isize)
                     }
                     CDDS_ITEMPOSTPAINT => {
+                        // the row rect — the control's `rc` is NOT filled
+                        // for list-view custom draw, query it — and the
+                        // row's snapshot element to paint
                         let row = draw.dwItemSpec as usize;
                         let mut rect = RECT::default();
                         SendMessageW(
@@ -873,15 +874,22 @@ fn notify(app: &RefCell<AppState>, lparam: LPARAM) -> LRESULT {
                             Some(WPARAM(row)),
                             Some(LPARAM(&mut rect as *mut RECT as isize)),
                         );
-                        println!("CDDS_ITEMPOSTPAINT, rect: {:?}", rect);
-                        rect.bottom = rect.bottom - 2;
-                        rect.right = 40;
-
-                        FillRect(draw.hdc, &rect, color_brush("red"));
-                        SetTextColor(draw.hdc, color_ref("blue"));
-                        let mut text = get_utf16_vec("hello");
-                        DrawTextW(draw.hdc, &mut text, &mut rect, DT_SINGLELINE);
-                        // let dc = DeviceContext::with_dc(FillRect(hdc, lprc, hbr), hdc)
+                        let area = Rect {
+                            x: rect.left,
+                            y: rect.top,
+                            w: rect.right - rect.left,
+                            h: rect.bottom - rect.top,
+                        };
+                        if let Ok(mut app) = app.try_borrow_mut() {
+                            if let Some(element) = app
+                                .root_widget
+                                .as_mut()
+                                .and_then(|root| find_list_rows(root, hdr.hwndFrom))
+                                .and_then(|rows| rows.get(row))
+                            {
+                                paint::paint_tree(draw.hdc, element, area);
+                            }
+                        }
                         LRESULT(CDRF_DODEFAULT as isize)
                     }
                     _ => LRESULT(CDRF_DODEFAULT as isize),
