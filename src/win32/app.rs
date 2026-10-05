@@ -33,7 +33,8 @@ use windows::{
                 CDDS_ITEMPOSTPAINT, CDDS_ITEMPREPAINT, CDDS_PREPAINT, CDRF_DODEFAULT,
                 CDRF_NOTIFYITEMDRAW, CDRF_NOTIFYPOSTERASE, CDRF_NOTIFYPOSTPAINT, EM_SETCUEBANNER,
                 ICC_LISTVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, LVM_GETITEMRECT,
-                LVM_SETITEMCOUNT, LVN_ITEMCHANGED, LVN_ODCACHEHINT, LVN_ODSTATECHANGED,
+                LVM_INSERTCOLUMN, LVM_SETCOLUMNWIDTH, LVM_SETITEMCOUNT, LVCFMT_LEFT, LVCF_FMT,
+                LVCF_WIDTH, LVCOLUMNW, LVN_ITEMCHANGED, LVN_ODCACHEHINT, LVN_ODSTATECHANGED,
                 LVS_NOCOLUMNHEADER, LVS_OWNERDATA, LVS_REPORT, LVS_SHOWSELALWAYS, NM_CUSTOMDRAW,
                 NMCUSTOMDRAW, NMHDR,
             },
@@ -434,6 +435,13 @@ impl AppState {
             );
         }
 
+        // lists got their final width from arrange — keep their single
+        // column matched to it (report-view columns don't follow resizes,
+        // and the column is the rows' hit-test area, not just paint box)
+        if let Some(widget) = self.root_widget.as_ref() {
+            sync_list_columns(widget);
+        }
+
         self.last_tree = Some(tree);
     }
 
@@ -577,6 +585,24 @@ impl AppState {
         };
         unsafe {
             SendMessageW(hwnd, LVM_SETITEMCOUNT, Some(WPARAM(count)), None);
+        }
+        // A report-view item lives in COLUMN SPACE — with no columns the rows
+        // have zero width: nothing to hit-test, so clicks never select and no
+        // selection notifications fire. One full-width column is the list's
+        // body; its width is synced to the control after arrange.
+        let mut column = LVCOLUMNW {
+            mask: LVCF_FMT | LVCF_WIDTH,
+            fmt: LVCFMT_LEFT,
+            cx: 300,
+            ..Default::default()
+        };
+        unsafe {
+            SendMessageW(
+                hwnd,
+                LVM_INSERTCOLUMN,
+                Some(WPARAM(0)),
+                Some(LPARAM(&mut column as *mut LVCOLUMNW as isize)),
+            );
         }
         hwnd
     }
@@ -793,6 +819,24 @@ fn find_list_rows(widget: &mut Widget, hwnd: HWND) -> Option<&Vec<Box<Element>>>
             .iter_mut()
             .find_map(|child| find_list_rows(child, hwnd)),
         _ => None,
+    }
+}
+
+/// Keep each list's single column matched to its control's width.
+fn sync_list_columns(widget: &Widget) {
+    match widget {
+        Widget::List { hwnd, .. } => unsafe {
+            let mut rect = RECT::default();
+            let _ = GetClientRect(*hwnd, &mut rect);
+            SendMessageW(
+                *hwnd,
+                LVM_SETCOLUMNWIDTH,
+                Some(WPARAM(0)),
+                Some(LPARAM((rect.right - rect.left) as isize)),
+            );
+        },
+        Widget::Container { children, .. } => children.iter().for_each(sync_list_columns),
+        _ => {}
     }
 }
 
