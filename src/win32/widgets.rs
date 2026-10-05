@@ -46,6 +46,13 @@ pub enum Widget {
     Label {
         hwnd: HWND,
     },
+    /// A virtual list-view (LVS_OWNERDATA): the control holds only a COUNT;
+    /// `rows` is the render-time snapshot it serves to visible rows — the
+    /// twin of the macOS delegate's snapshot.
+    List {
+        hwnd: HWND,
+        rows: Vec<Box<Element>>,
+    },
 }
 
 /// Which neutral widget flavor is this — the platform half of the
@@ -57,6 +64,7 @@ impl Widget {
             Widget::Button { .. } => WidgetKind::Button,
             Widget::Label { .. } => WidgetKind::Label,
             Widget::Input { .. } => WidgetKind::Input,
+            Widget::List { .. } => WidgetKind::List,
         }
     }
 }
@@ -71,7 +79,8 @@ impl Drop for Widget {
         match self {
             Widget::Button { hwnd, .. }
             | Widget::Label { hwnd }
-            | Widget::Input { hwnd, .. } => unsafe {
+            | Widget::Input { hwnd, .. }
+            | Widget::List { hwnd, .. } => unsafe {
                 let _ = DestroyWindow(*hwnd);
             },
             Widget::Container {

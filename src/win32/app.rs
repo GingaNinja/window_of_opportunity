@@ -28,7 +28,13 @@ use windows::{
             TRANSPARENT,
         },
         System::LibraryLoader::GetModuleHandleW,
-        UI::{Controls::EM_SETCUEBANNER, WindowsAndMessaging::*},
+        UI::Controls::{
+            CDDS_ITEMPREPAINT, CDDS_PREPAINT, CDRF_DODEFAULT, CDRF_NOTIFYITEMDRAW, EM_SETCUEBANNER,
+            ICC_LISTVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, LVM_SETITEMCOUNT,
+            LVN_ITEMCHANGED, LVN_ODCACHEHINT, LVS_NOCOLUMNHEADER, LVS_OWNERDATA, LVS_REPORT,
+            LVS_SHOWSELALWAYS, NM_CUSTOMDRAW, NMCUSTOMDRAW, NMHDR,
+        },
+        UI::WindowsAndMessaging::*,
     },
     core::*,
 };
@@ -105,6 +111,7 @@ impl Application {
 
             register_class(hinst);
             register_div_class(hinst);
+            init_common_controls();
 
             // The app-message adapter: downcasts the erased payload back to
             // M. This is what keeps AppState non-generic (the cacao side
@@ -238,6 +245,16 @@ fn background_brush(hwnd: HWND) -> HBRUSH {
     }
 }
 
+/// Common controls (the list-view) need explicit init.
+fn init_common_controls() {
+    unsafe {
+        let _ = InitCommonControlsEx(&INITCOMMONCONTROLSEX {
+            dwSize: mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
+            dwICC: ICC_LISTVIEW_CLASSES,
+        });
+    }
+}
+
 /// The `wo_div` class proc: a Div paints its own background and lends its
 /// brush to children drawn on it. (Themed pushbuttons ignore
 /// WM_CTLCOLORBTN — our manifest-less classic controls honor it.)
@@ -258,6 +275,13 @@ unsafe extern "system" fn divproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     if let Ok(parent_hwnd) = GetParent(hwnd) {
                         return SendMessageW(parent_hwnd, WM_COMMAND, Some(wparam), Some(lparam));
                     }
+                }
+            }
+            WM_NOTIFY => {
+                // notifications bubble too — and custom draw's return value
+                // must propagate with them
+                if let Ok(parent_hwnd) = GetParent(hwnd) {
+                    return SendMessageW(parent_hwnd, WM_NOTIFY, Some(wparam), Some(lparam));
                 }
             }
             WM_ERASEBKGND => {
@@ -477,8 +501,17 @@ impl AppState {
                     on_change: el.handlers.get("on_change").cloned(),
                 }
             }
-            ElementType::Image | ElementType::List => {
-                todo!("win32: Image/List not yet implemented")
+            ElementType::List => {
+                // The snapshot IS the datasource — same contract as the
+                // macOS delegate: built at render, served to visible rows.
+                let rows = reconcile::snapshot_rows(&self.state, el);
+                Widget::List {
+                    hwnd: self.create_list(parent, rows.len()),
+                    rows,
+                }
+            }
+            ElementType::Image => {
+                todo!("win32: Image not yet implemented")
             }
             ElementType::Component(_) => {
                 unreachable!("component elements are expanded before mounting")
@@ -506,6 +539,41 @@ impl AppState {
             )
             .expect("CreateWindowExW div")
         }
+    }
+
+    /// A virtual list-view — the control owns only the COUNT
+    /// (LVS_OWNERDATA); rows come from the snapshot as they scroll into
+    /// view. Single-column, headerless report view = our list look.
+    fn create_list(&self, parent: HWND, count: usize) -> HWND {
+        let style = LVS_REPORT
+            | LVS_OWNERDATA
+            | LVS_NOCOLUMNHEADER
+            | LVS_SHOWSELALWAYS
+            | WS_TABSTOP.0
+            | WS_BORDER.0
+            | WS_CHILD.0
+            | WS_VISIBLE.0;
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("SysListView32"),
+                w!(""),
+                WINDOW_STYLE(style),
+                0,
+                0,
+                10,
+                10, // arrange() positions it before anything is visible
+                Some(parent),
+                None,
+                Some(HINSTANCE(GetModuleHandleW(None).unwrap().0)),
+                None,
+            )
+            .expect("CreateWindowExW list")
+        };
+        unsafe {
+            SendMessageW(hwnd, LVM_SETITEMCOUNT, Some(WPARAM(count)), None);
+        }
+        hwnd
     }
 
     /// Creates a child control. `style` is the class-specific style bits
@@ -590,6 +658,17 @@ impl AppState {
                 // the handler lives on the widget now — refreshing it is a
                 // field write (it's always current, same as the delegate)
                 *on_change = new_el.handlers.get("on_change").cloned();
+            }
+            (Widget::List { hwnd, rows }, ElementType::List) => {
+                // refresh the snapshot wholesale (the render's rows) and
+                // tell the control the new count — it re-asks for whatever
+                // is visible, same as the macOS reload() pass
+                *rows = reconcile::snapshot_rows(&self.state, new_el);
+                unsafe {
+                    SendMessageW(*hwnd, LVM_SETITEMCOUNT, Some(WPARAM(rows.len())), None);
+                }
+                // TODO(painting): row height — measure the tallest snapshot
+                // row and apply the LVM_SETICONSPACING row-height hack.
             }
             // the caller only patches compatible pairs
             _ => unreachable!("patch called on an incompatible widget/element pair"),
@@ -711,6 +790,58 @@ fn find_input_handler(widget: &mut Widget, hwnd: HWND) -> Option<Handler> {
     }
 }
 
+/// The snapshot rows for the list with this hwnd — the datasource the
+/// painting work draws from.
+#[allow(dead_code)] // consumed by the row-painting work
+fn find_list_rows(widget: &mut Widget, hwnd: HWND) -> Option<&Vec<Box<Element>>> {
+    match widget {
+        Widget::List { hwnd: h, rows } if *h == hwnd => Some(rows),
+        Widget::Container { children, .. } => {
+            children.iter_mut().find_map(|child| find_list_rows(child, hwnd))
+        }
+        _ => None,
+    }
+}
+
+/// WM_NOTIFY from a child control. The custom-draw stage chain is the
+/// seam where row painting plugs in — the plumbing is here, the pixels
+/// are yours.
+#[allow(unused_variables)] // `app` is the painting work's entry to the snapshot
+fn notify(app: &RefCell<AppState>, lparam: LPARAM) -> LRESULT {
+    unsafe {
+        let hdr = &*(lparam.0 as *const NMHDR);
+        match hdr.code {
+            NM_CUSTOMDRAW => {
+                let draw = &*(lparam.0 as *const NMCUSTOMDRAW);
+                match draw.dwDrawStage {
+                    CDDS_PREPAINT => LRESULT(CDRF_NOTIFYITEMDRAW as isize),
+                    CDDS_ITEMPREPAINT => {
+                        // TODO(painting): paint the row here from
+                        // find_list_rows(app…, hdr.hwndFrom)[draw.dwItemSpec]
+                        // — stack boxes via stack::natural/arrange, pixels
+                        // via DrawTextW/FillRect. Return
+                        // CDRF_SKIPDEFAULT once we own the row's painting.
+                        LRESULT(CDRF_DODEFAULT as isize)
+                    }
+                    _ => LRESULT(CDRF_DODEFAULT as isize),
+                }
+            }
+            LVN_ODCACHEHINT => {
+                // TODO(painting/live rows): the visible range just changed
+                // (NMLVCACHEHINT iFrom..iTo) — the prefetch window the
+                // macOS side covers with its dequeue pool.
+                LRESULT(0)
+            }
+            LVN_ITEMCHANGED => {
+                // TODO(on_select): selection changed — a future
+                // Handler::Select rides here.
+                LRESULT(0)
+            }
+            _ => LRESULT(0),
+        }
+    }
+}
+
 /// The WndProc is the delegate: `did_finish_launching` happened in `run`,
 /// and everything below is Dispatcher + WindowProxy + (later) InputDelegate.
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -742,6 +873,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     text_change_and_render(app, HWND(lparam.0 as *mut _));
                     return LRESULT(0);
                 }
+            }
+            WM_NOTIFY => {
+                // child controls report here too — NMHDR.hwndFrom is the
+                // event source (the same model as Input/Button clicks).
+                // The custom-draw return chain must propagate, so this
+                // returns rather than falling through.
+                return notify(app, lparam);
             }
             WM_APP_MSG => {
                 // the app-side half of the Send boundary (see `dispatch`)
