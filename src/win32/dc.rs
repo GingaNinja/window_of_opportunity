@@ -2,7 +2,7 @@ use super::util::get_utf16_vec;
 use windows::Win32::{Foundation::*, Graphics::Gdi::*};
 
 pub struct DeviceContext {
-    hdc: HDC,
+    pub hdc: HDC,
     ps: Option<PAINTSTRUCT>,
     hwnd: HWND,
     tabs: Vec<i32>,

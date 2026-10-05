@@ -8,7 +8,10 @@
 use windows::Win32::{
     Foundation::HWND,
     Graphics::Gdi::{DeleteObject, HBRUSH},
-    UI::WindowsAndMessaging::{DestroyWindow, GetParent},
+    UI::{
+        Controls::HIMAGELIST,
+        WindowsAndMessaging::{DestroyWindow, GetParent},
+    },
 };
 
 use crate::{
@@ -52,6 +55,8 @@ pub enum Widget {
     List {
         hwnd: HWND,
         rows: Vec<Box<Element>>,
+        row_height: i32,
+        image_list: Option<HIMAGELIST>,
     },
 }
 

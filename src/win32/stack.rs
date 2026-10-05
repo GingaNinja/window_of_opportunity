@@ -143,8 +143,11 @@ pub fn natural(el: &Element, widget: &Widget) -> (i32, i32) {
     let pad = style.padding as i32;
 
     let (mut w, mut h) = match (widget, &el.element_type) {
-        (Widget::Button { hwnd, .. }, _) => measure_button(*hwnd, &button_label(el)),
-        (Widget::Label { hwnd }, ElementType::Text(text)) => measure_text(*hwnd, text),
+        (Widget::Button { hwnd, .. }, _) => measure_button(*hwnd, &button_label(el), None),
+        (Widget::Label { hwnd }, ElementType::Text(text)) => {
+            let font_size = el.props.get_usize(crate::element::PropType::FontSize);
+            measure_text(*hwnd, text, font_size)
+        }
         (Widget::Container { children, .. }, _) => {
             let gap = style.gap as i32;
             let (mut main, mut cross) = (0, 0);
@@ -210,19 +213,19 @@ fn place_hwnd(hwnd: HWND, x: i32, y: i32, w: i32, h: i32) {
     }
 }
 
-fn measure_text(hwnd: HWND, text: &str) -> (i32, i32) {
-    let (w, h) = text_extent(hwnd, text);
+fn measure_text(hwnd: HWND, text: &str, size: Option<usize>) -> (i32, i32) {
+    let (w, h) = text_extent(hwnd, text, size);
     (w + 2, h + 4)
 }
 
-fn measure_button(hwnd: HWND, text: &str) -> (i32, i32) {
+fn measure_button(hwnd: HWND, text: &str, font_size: Option<usize>) -> (i32, i32) {
     // text extent + push-button chrome (the step-2 approximation of
     // BCM_GETIDEALSIZE, which arrives with the common-controls work)
-    let (w, h) = text_extent(hwnd, text);
+    let (w, h) = text_extent(hwnd, text, font_size);
     (w + 32, h + 14)
 }
 
-fn text_extent(hwnd: HWND, text: &str) -> (i32, i32) {
+fn text_extent(hwnd: HWND, text: &str, font_size: Option<usize>) -> (i32, i32) {
     let wide = get_utf16_vec(text);
     unsafe {
         let hdc = GetDC(Some(hwnd));

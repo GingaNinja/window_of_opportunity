@@ -24,19 +24,20 @@ use windows::{
     Win32::{
         Foundation::*,
         Graphics::Gdi::{
-            CreateSolidBrush, DeleteObject, FillRect, HBRUSH, HDC, InvalidateRect, SetBkMode,
-            TRANSPARENT,
+            CreateCompatibleBitmap, CreateSolidBrush, DeleteObject, FillRect, GetDC, HBITMAP,
+            HBRUSH, HDC, InvalidateRect, SetBkMode, TRANSPARENT,
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::{
             Controls::{
                 CDDS_ITEMPOSTPAINT, CDDS_ITEMPREPAINT, CDDS_PREPAINT, CDRF_DODEFAULT,
                 CDRF_NOTIFYITEMDRAW, CDRF_NOTIFYPOSTERASE, CDRF_NOTIFYPOSTPAINT, EM_SETCUEBANNER,
-                ICC_LISTVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, LVM_GETITEMRECT,
-                LVM_INSERTCOLUMN, LVM_SETCOLUMNWIDTH, LVM_SETITEMCOUNT, LVCFMT_LEFT, LVCF_FMT,
-                LVCF_WIDTH, LVCOLUMNW, LVN_ITEMCHANGED, LVN_ODCACHEHINT, LVN_ODSTATECHANGED,
-                LVS_NOCOLUMNHEADER, LVS_OWNERDATA, LVS_REPORT, LVS_SHOWSELALWAYS, NM_CUSTOMDRAW,
-                NMCUSTOMDRAW, NMHDR,
+                HIMAGELIST, ICC_LISTVIEW_CLASSES, ILC_COLOR32, INITCOMMONCONTROLSEX, ImageList_Add,
+                ImageList_Create, ImageList_Destroy, InitCommonControlsEx, LVCF_FMT, LVCF_MINWIDTH,
+                LVCF_WIDTH, LVCFMT_LEFT, LVCOLUMNW, LVM_GETITEMRECT, LVM_INSERTCOLUMN,
+                LVM_SETCOLUMNWIDTH, LVM_SETIMAGELIST, LVM_SETITEMCOUNT, LVN_ITEMCHANGED,
+                LVN_ODCACHEHINT, LVN_ODSTATECHANGED, LVS_NOCOLUMNHEADER, LVS_OWNERDATA, LVS_REPORT,
+                LVS_SHOWSELALWAYS, LVSIL_SMALL, NM_CUSTOMDRAW, NMCUSTOMDRAW, NMHDR,
             },
             WindowsAndMessaging::*,
         },
@@ -49,6 +50,7 @@ use crate::{
     element::{Element, ElementType, PropType, button_label, window_spec},
     reconcile,
     state::{Ctx, Event, Handler, Handlers, State},
+    win32::dc,
 };
 
 use super::{
@@ -518,9 +520,20 @@ impl AppState {
                 // The snapshot IS the datasource — same contract as the
                 // macOS delegate: built at render, served to visible rows.
                 let rows = reconcile::snapshot_rows(&self.state, el);
+                let tallest = {
+                    let dc = dc::DeviceContext::get_dc(parent);
+                    rows.iter().map(|r| paint::natural_size(dc.hdc, r).1).max()
+                }
+                .unwrap_or(20);
+                println!("row height will be {}", tallest);
+                let list_hwnd = self.create_list(parent, rows.len());
+                let mut himl_slot = None;
+                Self::set_row_height(list_hwnd, &mut himl_slot, tallest);
                 Widget::List {
-                    hwnd: self.create_list(parent, rows.len()),
+                    hwnd: list_hwnd,
                     rows,
+                    row_height: tallest,
+                    image_list: himl_slot,
                 }
             }
             ElementType::Image => {
@@ -529,6 +542,26 @@ impl AppState {
             ElementType::Component(_) => {
                 unreachable!("component elements are expanded before mounting")
             }
+        }
+    }
+
+    fn set_row_height(list: HWND, himl_slot: &mut Option<HIMAGELIST>, height: i32) {
+        unsafe {
+            let himl = ImageList_Create(1, height, ILC_COLOR32, 1, 1);
+            let hbm = CreateCompatibleBitmap(GetDC(Some(list)), 1, height);
+            ImageList_Add(himl, hbm, Some(HBITMAP::default()));
+            DeleteObject(hbm.into());
+
+            let old = SendMessageW(
+                list,
+                LVM_SETIMAGELIST,
+                Some(WPARAM(LVSIL_SMALL as usize)),
+                Some(LPARAM(himl.0 as isize)),
+            );
+            if let Some(old) = *himl_slot {
+                let _ = ImageList_Destroy(Some(old));
+            }
+            *himl_slot = Some(himl);
         }
     }
 
@@ -591,9 +624,10 @@ impl AppState {
         // selection notifications fire. One full-width column is the list's
         // body; its width is synced to the control after arrange.
         let mut column = LVCOLUMNW {
-            mask: LVCF_FMT | LVCF_WIDTH,
+            mask: LVCF_FMT | LVCF_WIDTH | LVCF_MINWIDTH,
             fmt: LVCFMT_LEFT,
-            cx: 300,
+            cx: 600,
+            cxMin: 600,
             ..Default::default()
         };
         unsafe {
@@ -684,11 +718,28 @@ impl AppState {
                 // field write (it's always current, same as the delegate)
                 *on_change = new_el.handlers.get("on_change").cloned();
             }
-            (Widget::List { hwnd, rows }, ElementType::List) => {
+            (
+                Widget::List {
+                    hwnd,
+                    rows,
+                    row_height,
+                    image_list,
+                },
+                ElementType::List,
+            ) => {
                 // refresh the snapshot wholesale (the render's rows) and
                 // tell the control the new count — it re-asks for whatever
                 // is visible, same as the macOS reload() pass
                 *rows = reconcile::snapshot_rows(&self.state, new_el);
+                let tallest = {
+                    let dc = dc::DeviceContext::get_dc(*hwnd);
+                    rows.iter().map(|r| paint::natural_size(dc.hdc, r).1).max()
+                }
+                .unwrap_or(20);
+                println!("row height will be {}", tallest);
+                let list_hwnd = self.create_list(*hwnd, rows.len());
+                let mut himl_slot = None;
+                Self::set_row_height(list_hwnd, &mut himl_slot, tallest);
                 unsafe {
                     SendMessageW(*hwnd, LVM_SETITEMCOUNT, Some(WPARAM(rows.len())), None);
                 }
@@ -813,7 +864,7 @@ fn find_input_handler(widget: &mut Widget, hwnd: HWND) -> Option<Handler> {
 /// painting work draws from.
 fn find_list_rows(widget: &mut Widget, hwnd: HWND) -> Option<&Vec<Box<Element>>> {
     match widget {
-        Widget::List { hwnd: h, rows } if *h == hwnd => Some(rows),
+        Widget::List { hwnd: h, rows, .. } if *h == hwnd => Some(rows),
         Widget::Container { children, .. } => children
             .iter_mut()
             .find_map(|child| find_list_rows(child, hwnd)),
@@ -827,11 +878,12 @@ fn sync_list_columns(widget: &Widget) {
         Widget::List { hwnd, .. } => unsafe {
             let mut rect = RECT::default();
             let _ = GetClientRect(*hwnd, &mut rect);
+            println!("clientrect for listview: {:?}", rect);
             SendMessageW(
                 *hwnd,
                 LVM_SETCOLUMNWIDTH,
                 Some(WPARAM(0)),
-                Some(LPARAM((rect.right - rect.left) as isize)),
+                Some(LPARAM((1000) as isize)),
             );
         },
         Widget::Container { children, .. } => children.iter().for_each(sync_list_columns),
@@ -859,7 +911,6 @@ fn notify(app: &RefCell<AppState>, lparam: LPARAM) -> LRESULT {
                         // — stack boxes via stack::natural/arrange, pixels
                         // via DrawTextW/FillRect. Return
                         // CDRF_SKIPDEFAULT once we own the row's painting.
-                        println!("draw.itemstate: {:?}", draw.uItemState);
                         LRESULT((CDRF_NOTIFYPOSTPAINT | CDRF_NOTIFYPOSTERASE) as isize)
                     }
                     CDDS_ITEMPOSTPAINT => {
