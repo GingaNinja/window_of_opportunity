@@ -22,6 +22,15 @@ impl DeviceContext {
         }
     }
 
+    pub fn with_dc(hwnd: HWND, hdc: HDC) -> Self {
+        Self {
+            hwnd,
+            hdc,
+            ps: None,
+            tabs: Vec::new(),
+        }
+    }
+
     pub fn set_tabs(&mut self, tabs: Vec<i32>) {
         self.tabs = tabs;
     }

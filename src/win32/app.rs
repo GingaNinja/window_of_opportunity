@@ -24,17 +24,21 @@ use windows::{
     Win32::{
         Foundation::*,
         Graphics::Gdi::{
-            CreateSolidBrush, DeleteObject, FillRect, HBRUSH, HDC, InvalidateRect, SetBkMode,
-            TRANSPARENT,
+            CreateSolidBrush, DT_SINGLELINE, DeleteObject, DrawTextW, FillRect, HBRUSH, HDC,
+            InvalidateRect, SetBkMode, SetTextColor, TRANSPARENT,
         },
         System::LibraryLoader::GetModuleHandleW,
-        UI::Controls::{
-            CDDS_ITEMPREPAINT, CDDS_PREPAINT, CDRF_DODEFAULT, CDRF_NOTIFYITEMDRAW, EM_SETCUEBANNER,
-            ICC_LISTVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, LVM_SETITEMCOUNT,
-            LVN_ITEMCHANGED, LVN_ODCACHEHINT, LVS_NOCOLUMNHEADER, LVS_OWNERDATA, LVS_REPORT,
-            LVS_SHOWSELALWAYS, NM_CUSTOMDRAW, NMCUSTOMDRAW, NMHDR,
+        UI::{
+            Controls::{
+                CDDS_ITEMPOSTPAINT, CDDS_ITEMPREPAINT, CDDS_PREPAINT, CDRF_DODEFAULT,
+                CDRF_NOTIFYITEMDRAW, CDRF_NOTIFYPOSTERASE, CDRF_NOTIFYPOSTPAINT, EM_SETCUEBANNER,
+                ICC_LISTVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, LVM_GETITEMRECT,
+                LVM_SETITEMCOUNT, LVN_ITEMCHANGED, LVN_ODCACHEHINT, LVN_ODSTATECHANGED,
+                LVS_NOCOLUMNHEADER, LVS_OWNERDATA, LVS_REPORT, LVS_SHOWSELALWAYS, NM_CUSTOMDRAW,
+                NMCUSTOMDRAW, NMHDR,
+            },
+            WindowsAndMessaging::*,
         },
-        UI::WindowsAndMessaging::*,
     },
     core::*,
 };
@@ -44,6 +48,7 @@ use crate::{
     element::{Element, ElementType, PropType, button_label, window_spec},
     reconcile,
     state::{Ctx, Event, Handler, Handlers, State},
+    win32::dc::DeviceContext,
 };
 
 use super::{
@@ -579,13 +584,7 @@ impl AppState {
     /// Creates a child control. `style` is the class-specific style bits
     /// (the windows crate types these inconsistently — i32, STATIC_STYLES —
     /// so they arrive raw and join WS_CHILD | WS_VISIBLE here).
-    fn create_control(
-        &self,
-        class: PCWSTR,
-        text: &str,
-        style: u32,
-        parent: HWND,
-    ) -> HWND {
+    fn create_control(&self, class: PCWSTR, text: &str, style: u32, parent: HWND) -> HWND {
         let text_wide = get_utf16_vec(text);
         unsafe {
             CreateWindowExW(
@@ -751,13 +750,10 @@ fn click_and_render(app: &RefCell<AppState>, button: HWND) {
 
 fn find_button_handler(widget: &mut Widget, hwnd: HWND) -> Option<Event> {
     match widget {
-        Widget::Button {
-            hwnd: h,
-            on_click,
-        } if *h == hwnd => on_click.clone(),
-        Widget::Container { children, .. } => {
-            children.iter_mut().find_map(|child| find_button_handler(child, hwnd))
-        }
+        Widget::Button { hwnd: h, on_click } if *h == hwnd => on_click.clone(),
+        Widget::Container { children, .. } => children
+            .iter_mut()
+            .find_map(|child| find_button_handler(child, hwnd)),
         _ => None,
     }
 }
@@ -779,13 +775,10 @@ fn text_change_and_render(app: &RefCell<AppState>, edit: HWND) {
 
 fn find_input_handler(widget: &mut Widget, hwnd: HWND) -> Option<Handler> {
     match widget {
-        Widget::Input {
-            hwnd: h,
-            on_change,
-        } if *h == hwnd => on_change.clone(),
-        Widget::Container { children, .. } => {
-            children.iter_mut().find_map(|child| find_input_handler(child, hwnd))
-        }
+        Widget::Input { hwnd: h, on_change } if *h == hwnd => on_change.clone(),
+        Widget::Container { children, .. } => children
+            .iter_mut()
+            .find_map(|child| find_input_handler(child, hwnd)),
         _ => None,
     }
 }
@@ -796,9 +789,9 @@ fn find_input_handler(widget: &mut Widget, hwnd: HWND) -> Option<Handler> {
 fn find_list_rows(widget: &mut Widget, hwnd: HWND) -> Option<&Vec<Box<Element>>> {
     match widget {
         Widget::List { hwnd: h, rows } if *h == hwnd => Some(rows),
-        Widget::Container { children, .. } => {
-            children.iter_mut().find_map(|child| find_list_rows(child, hwnd))
-        }
+        Widget::Container { children, .. } => children
+            .iter_mut()
+            .find_map(|child| find_list_rows(child, hwnd)),
         _ => None,
     }
 }
@@ -814,13 +807,37 @@ fn notify(app: &RefCell<AppState>, lparam: LPARAM) -> LRESULT {
             NM_CUSTOMDRAW => {
                 let draw = &*(lparam.0 as *const NMCUSTOMDRAW);
                 match draw.dwDrawStage {
-                    CDDS_PREPAINT => LRESULT(CDRF_NOTIFYITEMDRAW as isize),
+                    CDDS_PREPAINT => {
+                        // LRESULT(CDRF_NOTIFYITEMDRAW as isize)
+                        LRESULT((CDRF_NOTIFYPOSTPAINT | CDRF_NOTIFYITEMDRAW) as isize)
+                    }
                     CDDS_ITEMPREPAINT => {
                         // TODO(painting): paint the row here from
                         // find_list_rows(app…, hdr.hwndFrom)[draw.dwItemSpec]
                         // — stack boxes via stack::natural/arrange, pixels
                         // via DrawTextW/FillRect. Return
                         // CDRF_SKIPDEFAULT once we own the row's painting.
+                        println!("draw.itemstate: {:?}", draw.uItemState);
+                        LRESULT((CDRF_NOTIFYPOSTPAINT | CDRF_NOTIFYPOSTERASE) as isize)
+                    }
+                    CDDS_ITEMPOSTPAINT => {
+                        let row = draw.dwItemSpec as usize;
+                        let mut rect = RECT::default();
+                        SendMessageW(
+                            hdr.hwndFrom,
+                            LVM_GETITEMRECT,
+                            Some(WPARAM(row)),
+                            Some(LPARAM(&mut rect as *mut RECT as isize)),
+                        );
+                        println!("CDDS_ITEMPOSTPAINT, rect: {:?}", rect);
+                        rect.bottom = rect.bottom - 2;
+                        rect.right = 40;
+
+                        FillRect(draw.hdc, &rect, color_brush("red"));
+                        SetTextColor(draw.hdc, color_ref("blue"));
+                        let mut text = get_utf16_vec("hello");
+                        DrawTextW(draw.hdc, &mut text, &mut rect, DT_SINGLELINE);
+                        // let dc = DeviceContext::with_dc(FillRect(hdc, lprc, hbr), hdc)
                         LRESULT(CDRF_DODEFAULT as isize)
                     }
                     _ => LRESULT(CDRF_DODEFAULT as isize),
@@ -835,6 +852,11 @@ fn notify(app: &RefCell<AppState>, lparam: LPARAM) -> LRESULT {
             LVN_ITEMCHANGED => {
                 // TODO(on_select): selection changed — a future
                 // Handler::Select rides here.
+                println!("item changed");
+                LRESULT(0)
+            }
+            LVN_ODSTATECHANGED => {
+                println!("state changed");
                 LRESULT(0)
             }
             _ => LRESULT(0),
