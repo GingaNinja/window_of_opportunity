@@ -1,3 +1,4 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use window_of_opportunity::{app::Application, component::Component, ui};
 
 /// A component with its own state: the count lives in a keyed slot that
@@ -112,7 +113,7 @@ impl Component for Window {
                        state.update("window/size", |s: &mut (f64, f64)| *s = (w, h))) {
                 { Div direction("column") gap(10.) padding(16.) {
                     { Pane }
-                    { Div height(80.) background("blue") {} }
+                    { Div height(80.) {} }
                     { Div direction("row") gap(10.) height(60.) {
                         { Button { Text "Hello, and this should mean a bigger button" } }
                         { Button { Text "Two" } }

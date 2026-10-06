@@ -105,7 +105,7 @@ impl Application {
             // the macOS titlebar math: AdjustWindowRectEx adds the chrome,
             // and the client rect needs no offset at all)
             let style = WS_OVERLAPPEDWINDOW;
-            let ex_style = WS_EX_APPWINDOW;
+            let ex_style = WS_EX_APPWINDOW | WS_EX_CONTROLPARENT;
             let client_w = spec.width.unwrap_or(1024.) as i32;
             let client_h = spec.height.unwrap_or(768.) as i32;
             let mut rect = RECT {
@@ -167,13 +167,13 @@ impl Application {
             state.borrow_mut().render();
             let _ = ShowWindow(hwnd, SW_SHOW);
 
-            // the message loop (the old WPApp::run's body, simplified: a
-            // plain GetMessage pump — the reactive model repaints on
-            // messages only, no idle painting)
+            // the message loop — IsDialogMessageW recurses into WS_EX_CONTROLPARENT children
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, None, 0, 0).into() {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
+                if !IsDialogMessageW(hwnd, &msg).as_bool() {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
             }
         }
     }
@@ -481,10 +481,9 @@ impl AppState {
                 }
             }
             ElementType::Text(text) => Widget::Label {
-                // SS_LEFT is literally the empty style bits (left-aligned is
-                // a static's default) — pass 0 and skip the SystemServices
-                // feature just for a zero constant
-                hwnd: self.create_control(w!("static"), text, 0, parent),
+                // SS_NOTIFY lets accessibility tools (and the mouse)
+                // interact with the label; SS_LEFT is the default (0).
+                hwnd: self.create_control(w!("static"), text, 0x0100, parent), // SS_NOTIFY-0x0100
             },
             ElementType::Button => {
                 // Handlers live on widgets (the InputDelegate model,
@@ -495,7 +494,7 @@ impl AppState {
                     hwnd: self.create_control(
                         w!("button"),
                         &button_label(el),
-                        BS_PUSHBUTTON as u32,
+                        BS_PUSHBUTTON as u32 | WS_TABSTOP.0,
                         parent,
                     ),
                     on_click: match el.handlers.get("on_click") {
@@ -509,7 +508,7 @@ impl AppState {
                 // on_change handler. Payload-carrying events live with their
                 // widget (the text comes from the control at fire time); the
                 // id registry is for payload-free dispatch.
-                let hwnd = self.create_control(w!("EDIT"), "", WS_BORDER.0, parent);
+                let hwnd = self.create_control(w!("EDIT"), "", WS_BORDER.0 | WS_TABSTOP.0, parent);
                 if let Some(value) = el.props.get_string(PropType::Value) {
                     set_window_text(hwnd, value);
                 }
@@ -578,7 +577,7 @@ impl AppState {
     fn create_div(&self, parent: HWND, background: Option<HBRUSH>) -> HWND {
         unsafe {
             CreateWindowExW(
-                WINDOW_EX_STYLE::default(),
+                WS_EX_CONTROLPARENT,
                 DIV_CLASS,
                 w!(""),
                 WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),

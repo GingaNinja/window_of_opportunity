@@ -57,6 +57,62 @@ fn main() {
 
 Checkout the examples folder for the kinds of controls you can currently use, and how you'd use the different handlers. Run using `cargo run --example todos` or any of the other examples.
 
+## Windows theming (comctl32 v6)
+
+On Windows, the examples in this repo run with the classic Win9x visual style because Cargo's example targets don't automatically receive embedded manifests from library build scripts. If you create a **binary crate** that depends on `window_of_opportunity`, embed a manifest that requests `comctl32` version 6 to get the modern themed look (gradients, rounded edit borders, etc.):
+
+1. Add an `app.manifest` file next to your `Cargo.toml`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+    <assemblyIdentity version="<your version here>" processorArchitecture="*" name="<shortname>" type="win32"/>
+    <description>longer description here</description>
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+          type="win32"
+          name="Microsoft.Windows.Common-Controls"
+          version="6.0.0.0"
+          processorArchitecture="*"
+          publicKeyToken="6595b64144ccf1df"
+          language="*" />
+    </dependentAssembly>
+  </dependency>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+    </windowsSettings>
+  </application>
+</assembly>
+```
+
+2. Add an `app.rc` resource definition file:
+
+```
+1 RT_MANIFEST "app.manifest"
+```
+
+3. Add `embed-resource` to your `[build-dependencies]` in `Cargo.toml`:
+
+```toml
+[build-dependencies]
+embed-resource = "3.0"
+```
+
+4. Create a `build.rs` in your binary crate:
+
+```rust
+fn main() {
+    embed_resource::compile("app.rc", embed_resource::NONE)
+        .manifest_required()
+        .unwrap();
+}
+```
+
+For a template of these files, see [`app.manifest`](app.manifest) and [`app.rc`](app.rc) in this repository.
+
 ## Project Status
 The very basic controls are there, and there are hooks for some state.
 
