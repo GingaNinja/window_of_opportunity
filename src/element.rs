@@ -169,7 +169,7 @@ impl Props {
 ///                 { CustomComponent }
 ///             }
 ///         }
-
+///
 /// }};
 /// ```
 /// *Note* `width(400.)` is a prop. Other props shown below.
@@ -586,7 +586,10 @@ mod typed_prop_tests {
 mod component_prop_tests {
     use super::*;
 
+    // the payload makes this a real custom prop type; nothing reads it —
+    // the type itself (non-Default) is the test subject
     #[derive(Debug)]
+    #[allow(dead_code)]
     struct Tag(&'static str); // deliberately NOT Default
 
     #[derive(Debug)]

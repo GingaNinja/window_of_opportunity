@@ -15,8 +15,8 @@ impl DeviceContext {
             hdc = GetDC(Some(hwnd));
         }
         DeviceContext {
-            hwnd: hwnd,
-            hdc: hdc,
+            hwnd,
+            hdc,
             ps: None,
             tabs: Vec::new(),
         }
@@ -42,7 +42,7 @@ impl DeviceContext {
             hdc = BeginPaint(hwnd, &mut ps);
         }
         DeviceContext {
-            hdc: hdc,
+            hdc,
             ps: Some(ps),
             hwnd,
             tabs: Vec::new(),
@@ -126,7 +126,7 @@ impl DeviceContext {
                 self.hdc,
                 x,
                 y,
-                &mut get_utf16_vec(text)[..],
+                &get_utf16_vec(text)[..],
                 Some(&self.tabs[..]),
                 0,
             );

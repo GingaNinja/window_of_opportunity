@@ -50,8 +50,10 @@ pub fn flex_changed(old: &Element, new: &Element) -> bool {
 pub fn compatible(kind: WidgetKind, new_el: &ElementType) -> bool {
     matches!(
         (kind, new_el),
-        (WidgetKind::Container, ElementType::Window | ElementType::Div)
-            | (WidgetKind::Button, ElementType::Button)
+        (
+            WidgetKind::Container,
+            ElementType::Window | ElementType::Div
+        ) | (WidgetKind::Button, ElementType::Button)
             | (WidgetKind::Label, ElementType::Text(_))
             | (WidgetKind::Input, ElementType::Input)
             | (WidgetKind::Image, ElementType::Image)
@@ -120,9 +122,7 @@ pub fn reconcile_children<W>(
 ) -> bool {
     let mut changed = old_children.len() != new_children.len();
 
-    for index in 0..new_children.len() {
-        let new_child = &new_children[index];
-
+    for (index, new_child) in new_children.iter().enumerate() {
         let mut slot_ok = false;
         if let (Some(slot), Some(old_child)) = (widgets.get_mut(index), old_children.get(index)) {
             slot_ok = compatible_child(slot, new_child);

@@ -13,10 +13,10 @@
 
 use windows::Win32::Foundation::{RECT, SIZE};
 use windows::Win32::Graphics::Gdi::{
-    CreateFontIndirectW, CreateSolidBrush, DeleteObject, DrawTextW, FillRect, GetDeviceCaps,
-    GetObjectW, GetStockObject, GetTextExtentPoint32W, SelectObject, SetBkMode, SetTextColor,
-    DEFAULT_GUI_FONT, DT_END_ELLIPSIS, DT_SINGLELINE, DT_VCENTER, HBRUSH, HFONT, HGDIOBJ, HDC,
-    LOGFONTW, LOGPIXELSY, TRANSPARENT,
+    CreateFontIndirectW, CreateSolidBrush, DEFAULT_GUI_FONT, DT_END_ELLIPSIS, DT_SINGLELINE,
+    DT_VCENTER, DeleteObject, DrawTextW, FillRect, GetDeviceCaps, GetObjectW, GetStockObject,
+    GetTextColor, GetTextExtentPoint32W, HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW, LOGPIXELSY,
+    SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
 
 use crate::{
@@ -24,11 +24,7 @@ use crate::{
     layout::{Direction, FlexStyle},
 };
 
-use super::{
-    app::color_ref,
-    stack::Rect,
-    util::get_utf16_vec,
-};
+use super::{app::color_ref, stack::Rect, util::get_utf16_vec};
 
 /// Paints an element tree into `area`. The walk mirrors stack::arrange:
 /// containers stack their children (column/row, gap, padding), leaves draw.
@@ -46,6 +42,7 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect) {
     match &el.element_type {
         ElementType::Text(text) => unsafe {
             SetBkMode(hdc, TRANSPARENT);
+            let old_text_color = GetTextColor(hdc);
             if let Some(fg) = el.props.get_string(PropType::Color) {
                 SetTextColor(hdc, color_ref(fg));
             }
@@ -58,7 +55,8 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect) {
                 &mut rect,
                 DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
             );
-        }
+            SetTextColor(hdc, old_text_color);
+        },
 
         ElementType::Button | ElementType::Input | ElementType::Image | ElementType::List => {
             // TODO(painting): painted rows can't host live controls —
@@ -85,8 +83,11 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect) {
             let main_is_row = matches!(style.direction, Direction::Row);
             let gap = style.gap as i32;
 
-            let naturals: Vec<(i32, i32)> =
-                el.children.iter().map(|child| natural_size(hdc, child)).collect();
+            let naturals: Vec<(i32, i32)> = el
+                .children
+                .iter()
+                .map(|child| natural_size(hdc, child))
+                .collect();
             let total_main: i32 = naturals
                 .iter()
                 .map(|(w, h)| if main_is_row { *w } else { *h })
@@ -210,7 +211,8 @@ impl FontGuard {
         };
         unsafe {
             // points → pixels (96 DPI ⇒ 1pt = 1.33px)
-            let pixels = ((size * GetDeviceCaps(Some(hdc), LOGPIXELSY) as f64 / 72.0).round()) as i32;
+            let pixels =
+                ((size * GetDeviceCaps(Some(hdc), LOGPIXELSY) as f64 / 72.0).round()) as i32;
             // the stock GUI font's face and weight, at the requested size
             let mut lf = LOGFONTW::default();
             GetObjectW(

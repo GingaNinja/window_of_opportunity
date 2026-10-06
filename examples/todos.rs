@@ -40,7 +40,7 @@ impl Component for TodoItem {
     ) -> Box<window_of_opportunity::element::Element> {
         ui! {
             Div direction("column") {
-                { Text self.item.title.clone() }
+                { Text font_size(18.) {self.item.title.clone()} }
                 // a `match` as a child — every arm returns an element
                 { match self.item.status {
                     TodoStatus::Complete => ui! { Text color("blue") font_size(10.) { "Complete".to_string() } },
@@ -89,9 +89,9 @@ impl Component for TodoView {
         let item_count = { items.borrow().len() };
 
         ui! {
-            Div {
+            Div grow(true) {
                 { Button on_click(add_todo) { Text "Add row" }}
-                { List rows(item_count) on_display_item(|ctx, row| {
+                { List grow(true)  rows(item_count) on_display_item(|ctx, row| {
                     let items = ctx.use_state("todos", seed);
                     let item = {
                         let rows = &items.borrow();
@@ -118,7 +118,7 @@ impl Component for Window {
     ) -> Box<window_of_opportunity::element::Element> {
         ui! {
             Window width(400.) height(400.)  {
-                { Div direction("column") background("blue") padding(20.) {
+                { Div grow(true)  direction("column") background("blue") padding(20.) {
                     { TodoView }
                 } }
             }

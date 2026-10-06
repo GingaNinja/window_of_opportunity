@@ -35,8 +35,9 @@ use windows::{
                 HIMAGELIST, ICC_LISTVIEW_CLASSES, ILC_COLOR32, INITCOMMONCONTROLSEX, ImageList_Add,
                 ImageList_Create, ImageList_Destroy, InitCommonControlsEx, LVCF_FMT, LVCF_MINWIDTH,
                 LVCF_WIDTH, LVCFMT_LEFT, LVCOLUMNW, LVM_GETITEMRECT, LVM_INSERTCOLUMN,
-                LVM_SETCOLUMNWIDTH, LVM_SETIMAGELIST, LVM_SETITEMCOUNT, LVN_ITEMCHANGED,
-                LVN_ODCACHEHINT, LVN_ODSTATECHANGED, LVS_NOCOLUMNHEADER, LVS_OWNERDATA, LVS_REPORT,
+                LVM_SETCOLUMNWIDTH, LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETIMAGELIST,
+                LVM_SETITEMCOUNT, LVN_ITEMCHANGED, LVN_ODCACHEHINT, LVN_ODSTATECHANGED,
+                LVS_EX_FULLROWSELECT, LVS_NOCOLUMNHEADER, LVS_OWNERDATA, LVS_REPORT,
                 LVS_SHOWSELALWAYS, LVSIL_SMALL, NM_CUSTOMDRAW, NMCUSTOMDRAW, NMHDR,
             },
             WindowsAndMessaging::*,
@@ -124,11 +125,10 @@ impl Application {
             // The app-message adapter: downcasts the erased payload back to
             // M. This is what keeps AppState non-generic (the cacao side
             // achieves the same by naming the types only in `dispatch_main`).
-            let on_app_message: Box<dyn Fn(&State, Box<dyn Any + Send>)> =
-                Box::new(move |state, message| {
-                    let message = message.downcast::<M>().expect("app message type");
-                    on_app_message(state, *message);
-                });
+            let on_app_message: AppMessageFn = Box::new(move |state, message| {
+                let message = message.downcast::<M>().expect("app message type");
+                on_app_message(state, *message);
+            });
 
             let state = Rc::new(RefCell::new(AppState {
                 root,
@@ -331,6 +331,9 @@ pub(crate) fn color_brush(name: &str) -> HBRUSH {
     unsafe { CreateSolidBrush(color_ref(name)) }
 }
 
+/// erased app-message adapter: `Box<dyn Fn(&State, Box<dyn Any + Send>)>`
+type AppMessageFn = Box<dyn Fn(&State, Box<dyn Any + Send>)>;
+
 pub(crate) struct AppState {
     root: Box<dyn Component>,
     pub state: State,
@@ -346,7 +349,7 @@ pub(crate) struct AppState {
     // through `dispatch`.
     /// app messages arrive erased (so AppState stays non-generic); the
     /// adapter built in `run` downcasts them back to M
-    on_app_message: Box<dyn Fn(&State, Box<dyn Any + Send>)>,
+    on_app_message: AppMessageFn,
     /// the client size the last render requested — the controlled-size rule
     /// (writes happen when the request changes, not when actual drifts)
     last_requested_size: Cell<Option<(i32, i32)>>,
@@ -437,11 +440,13 @@ impl AppState {
             );
         }
 
-        // lists got their final width from arrange — keep their single
-        // column matched to it (report-view columns don't follow resizes,
-        // and the column is the rows' hit-test area, not just paint box)
-        if let Some(widget) = self.root_widget.as_ref() {
-            sync_list_columns(widget);
+        // lists get their real size from arrange — now push each list's
+        // row height to the control (the small-image-list trick) and keep
+        // its single column matched to its width (report-view columns
+        // don't follow resizes, and the column is the rows' hit-test area,
+        // not just paint box)
+        if let Some(widget) = self.root_widget.as_mut() {
+            sync_lists(widget);
         }
 
         self.last_tree = Some(tree);
@@ -520,20 +525,23 @@ impl AppState {
                 // The snapshot IS the datasource — same contract as the
                 // macOS delegate: built at render, served to visible rows.
                 let rows = reconcile::snapshot_rows(&self.state, el);
-                let tallest = {
+                let row_height = {
                     let dc = dc::DeviceContext::get_dc(parent);
                     rows.iter().map(|r| paint::natural_size(dc.hdc, r).1).max()
                 }
                 .unwrap_or(20);
-                println!("row height will be {}", tallest);
                 let list_hwnd = self.create_list(parent, rows.len());
-                let mut himl_slot = None;
-                Self::set_row_height(list_hwnd, &mut himl_slot, tallest);
                 Widget::List {
                     hwnd: list_hwnd,
                     rows,
-                    row_height: tallest,
-                    image_list: himl_slot,
+                    row_height,
+                    // the row-height image list is deliberately NOT applied
+                    // here: the widget still sits at its 10x10 creation size,
+                    // and LVM_SETIMAGELIST at that size permanently offsets
+                    // the item grid (a blank band above row 0 — and it can't
+                    // be healed later). sync_lists applies it after
+                    // arrange() has given the list its real size.
+                    image_list: None,
                 }
             }
             ElementType::Image => {
@@ -550,9 +558,9 @@ impl AppState {
             let himl = ImageList_Create(1, height, ILC_COLOR32, 1, 1);
             let hbm = CreateCompatibleBitmap(GetDC(Some(list)), 1, height);
             ImageList_Add(himl, hbm, Some(HBITMAP::default()));
-            DeleteObject(hbm.into());
+            _ = DeleteObject(hbm.into());
 
-            let old = SendMessageW(
+            let _ = SendMessageW(
                 list,
                 LVM_SETIMAGELIST,
                 Some(WPARAM(LVSIL_SMALL as usize)),
@@ -617,6 +625,17 @@ impl AppState {
             .expect("CreateWindowExW list")
         };
         unsafe {
+            // Full-row select: without it, hit-testing is confined to the
+            // item's icon+label box (LVIR_SELECTBOUNDS) — and for a virtual
+            // item with no text that box is a ~48px stub, so clicks past it
+            // never select and the highlight is a sliver. With this style
+            // the whole row is the hit target.
+            SendMessageW(
+                hwnd,
+                LVM_SETEXTENDEDLISTVIEWSTYLE,
+                Some(WPARAM(LVS_EX_FULLROWSELECT as usize)),
+                Some(LPARAM(LVS_EX_FULLROWSELECT as isize)),
+            );
             SendMessageW(hwnd, LVM_SETITEMCOUNT, Some(WPARAM(count)), None);
         }
         // A report-view item lives in COLUMN SPACE — with no columns the rows
@@ -638,6 +657,7 @@ impl AppState {
                 Some(LPARAM(&mut column as *mut LVCOLUMNW as isize)),
             );
         }
+
         hwnd
     }
 
@@ -700,19 +720,16 @@ impl AppState {
                 // cacao side)
                 if old_el.props.get_string(PropType::Value)
                     != new_el.props.get_string(PropType::Value)
+                    && let Some(value) = new_el.props.get_string(PropType::Value)
+                    && get_window_text(*hwnd) != value
                 {
-                    if let Some(value) = new_el.props.get_string(PropType::Value) {
-                        if get_window_text(*hwnd) != value {
-                            set_window_text(*hwnd, value);
-                        }
-                    }
+                    set_window_text(*hwnd, value);
                 }
                 if old_el.props.get_string(PropType::Placeholder)
                     != new_el.props.get_string(PropType::Placeholder)
+                    && let Some(cue) = new_el.props.get_string(PropType::Placeholder)
                 {
-                    if let Some(cue) = new_el.props.get_string(PropType::Placeholder) {
-                        set_cue_banner(*hwnd, cue);
-                    }
+                    set_cue_banner(*hwnd, cue);
                 }
                 // the handler lives on the widget now — refreshing it is a
                 // field write (it's always current, same as the delegate)
@@ -731,24 +748,26 @@ impl AppState {
                 // tell the control the new count — it re-asks for whatever
                 // is visible, same as the macOS reload() pass
                 *rows = reconcile::snapshot_rows(&self.state, new_el);
-                let tallest = {
+                let measured = {
                     let dc = dc::DeviceContext::get_dc(*hwnd);
                     rows.iter().map(|r| paint::natural_size(dc.hdc, r).1).max()
                 }
                 .unwrap_or(20);
-                println!("row height will be {}", tallest);
-                let list_hwnd = self.create_list(*hwnd, rows.len());
-                let mut himl_slot = None;
-                Self::set_row_height(list_hwnd, &mut himl_slot, tallest);
+                if measured != *row_height {
+                    *row_height = measured;
+                    // a changed row height rides in on a fresh image list —
+                    // drop the old one (None = "pending") and let
+                    // sync_lists re-apply it post-arrange, the same
+                    // deferral as at mount: never while off-layout
+                    if let Some(old) = image_list.take() {
+                        unsafe {
+                            let _ = ImageList_Destroy(Some(old));
+                        }
+                    }
+                }
                 unsafe {
                     SendMessageW(*hwnd, LVM_SETITEMCOUNT, Some(WPARAM(rows.len())), None);
                 }
-                // TODO(row height): measure the tallest snapshot row
-                // (paint::natural_size) and push it to the control via the
-                // small-image-list trick (LVM_SETIMAGELIST LVSIL_SMALL with
-                // a bitmap of that height — the ObjectListView trick; rows
-                // are uniform in report view), then store it on the widget
-                // so stack::natural reads the same number.
             }
             // the caller only patches compatible pairs
             _ => unreachable!("patch called on an incompatible widget/element pair"),
@@ -866,6 +885,8 @@ fn find_input_handler(widget: &mut Widget, hwnd: HWND) -> Option<Handler> {
 
 /// The snapshot rows for the list with this hwnd — the datasource the
 /// painting work draws from.
+// `Vec<Box<Element>>` is the tree's node currency (see `Widget::List::rows`)
+#[allow(clippy::vec_box)]
 fn find_list_rows(widget: &mut Widget, hwnd: HWND) -> Option<&Vec<Box<Element>>> {
     match widget {
         Widget::List { hwnd: h, rows, .. } if *h == hwnd => Some(rows),
@@ -876,21 +897,36 @@ fn find_list_rows(widget: &mut Widget, hwnd: HWND) -> Option<&Vec<Box<Element>>>
     }
 }
 
-/// Keep each list's single column matched to its control's width.
-fn sync_list_columns(widget: &Widget) {
+/// Post-arrange list sync. The row height rides on a small image list
+/// (the ObjectListView trick — rows are uniform in report view), and it
+/// must only be applied once the list has its real size: LVM_SETIMAGELIST
+/// on a list still at its 10x10 creation size computes the item grid from
+/// that tiny view and the blank band above row 0 sticks forever. mount and
+/// patch therefore leave `image_list` as None ("pending"); applying it
+/// here — right after arrange() — lands it on a properly sized control.
+fn sync_lists(widget: &mut Widget) {
     match widget {
-        Widget::List { hwnd, .. } => unsafe {
-            let mut rect = RECT::default();
-            let _ = GetClientRect(*hwnd, &mut rect);
-            println!("clientrect for listview: {:?}", rect);
-            SendMessageW(
-                *hwnd,
-                LVM_SETCOLUMNWIDTH,
-                Some(WPARAM(0)),
-                Some(LPARAM((1000) as isize)),
-            );
-        },
-        Widget::Container { children, .. } => children.iter().for_each(sync_list_columns),
+        Widget::List {
+            hwnd,
+            row_height,
+            image_list,
+            ..
+        } => {
+            if image_list.is_none() {
+                AppState::set_row_height(*hwnd, image_list, *row_height);
+            }
+            unsafe {
+                let mut rect = RECT::default();
+                let _ = GetClientRect(*hwnd, &mut rect);
+                SendMessageW(
+                    *hwnd,
+                    LVM_SETCOLUMNWIDTH,
+                    Some(WPARAM(0)),
+                    Some(LPARAM((rect.right - rect.left) as isize)),
+                );
+            }
+        }
+        Widget::Container { children, .. } => children.iter_mut().for_each(sync_lists),
         _ => {}
     }
 }
@@ -921,7 +957,7 @@ fn notify(app: &RefCell<AppState>, lparam: LPARAM) -> LRESULT {
                         // the row rect — the control's `rc` is NOT filled
                         // for list-view custom draw, query it — and the
                         // row's snapshot element to paint
-                        let row = draw.dwItemSpec as usize;
+                        let row = draw.dwItemSpec;
                         let mut rect = RECT::default();
                         SendMessageW(
                             hdr.hwndFrom,
@@ -944,6 +980,18 @@ fn notify(app: &RefCell<AppState>, lparam: LPARAM) -> LRESULT {
                             {
                                 paint::paint_tree(draw.hdc, element, area);
                             }
+                        } else {
+                            // A render is in flight (it borrows the app), and
+                            // renders resize this very control — the redraw
+                            // that brought us here is their own SetWindowPos
+                            // or LVM_SETCOLUMNWIDTH. Painting now would read
+                            // a half-updated tree, so the row is skipped — but
+                            // this synchronous pass VALIDATES the control, so
+                            // no WM_PAINT would follow and the list would stay
+                            // blank (virtual rows draw empty). Re-invalidate:
+                            // the queued WM_PAINT lands after the render
+                            // returns and paints the rows for real.
+                            let _ = InvalidateRect(Some(hdr.hwndFrom), None, false);
                         }
                         LRESULT(CDRF_DODEFAULT as isize)
                     }
@@ -959,13 +1007,9 @@ fn notify(app: &RefCell<AppState>, lparam: LPARAM) -> LRESULT {
             LVN_ITEMCHANGED => {
                 // TODO(on_select): selection changed — a future
                 // Handler::Select rides here.
-                println!("item changed");
                 LRESULT(0)
             }
-            LVN_ODSTATECHANGED => {
-                println!("state changed");
-                LRESULT(0)
-            }
+            LVN_ODSTATECHANGED => LRESULT(0),
             _ => LRESULT(0),
         }
     }

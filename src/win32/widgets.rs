@@ -54,6 +54,10 @@ pub enum Widget {
     /// twin of the macOS delegate's snapshot.
     List {
         hwnd: HWND,
+        // `Vec<Box<Element>>` is the tree's node currency — uniform with
+        // Element::children and Component::render, and it keeps subtree
+        // splices pointer-sized (see also find_list_rows in app.rs)
+        #[allow(clippy::vec_box)]
         rows: Vec<Box<Element>>,
         row_height: i32,
         image_list: Option<HIMAGELIST>,
