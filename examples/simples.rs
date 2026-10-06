@@ -32,10 +32,7 @@ impl Component for Pane {
         mut children: Vec<Box<window_of_opportunity::element::Element>>,
     ) -> Box<window_of_opportunity::element::Element> {
         let first = ctx.use_state("first", || true);
-        let switch = ctx.set_state(
-            "first",
-            |f: &mut bool| if *f == true { *f = false } else { *f = true },
-        );
+        let switch = ctx.set_state("first", |f: &mut bool| *f = !*f);
 
         let text = if first {
             "first from pane"
@@ -59,7 +56,6 @@ impl Component for Pane {
                             }
                         }
                     }) }
-                  // { List data(vec!["some more things".to_string(), "again".to_string()]) }
                 }
             }
         } else {
@@ -82,7 +78,7 @@ impl Component for Typing {
         ctx: &window_of_opportunity::state::Ctx,
         _children: Vec<Box<window_of_opportunity::element::Element>>,
     ) -> Box<window_of_opportunity::element::Element> {
-        let text = ctx.use_state("text", || String::new());
+        let text = ctx.use_state("text", String::new);
 
         ui! {
             Div direction("column") gap(6.) {

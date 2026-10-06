@@ -50,6 +50,19 @@ pub fn window_spec(tree: &Element) -> WindowSpec {
     }
 }
 
+/// The label text of a Button element: its first Text child (empty when
+/// there isn't one). Both backends read the same spot — cacao's `setTitle`
+/// and win32's `SetWindowTextW`.
+pub fn button_label(el: &Element) -> String {
+    el.children
+        .iter()
+        .find_map(|child| match &child.element_type {
+            ElementType::Text(text) => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Prop {
     Float(f64),
@@ -156,7 +169,7 @@ impl Props {
 ///                 { CustomComponent }
 ///             }
 ///         }
-
+///
 /// }};
 /// ```
 /// *Note* `width(400.)` is a prop. Other props shown below.
@@ -571,9 +584,12 @@ mod typed_prop_tests {
 // (component props: custom types, partial props, hand-written Default)
 #[cfg(test)]
 mod component_prop_tests {
-    use crate::component::Component;
+    use super::*;
 
+    // the payload makes this a real custom prop type; nothing reads it —
+    // the type itself (non-Default) is the test subject
     #[derive(Debug)]
+    #[allow(dead_code)]
     struct Tag(&'static str); // deliberately NOT Default
 
     #[derive(Debug)]
@@ -612,12 +628,18 @@ mod component_prop_tests {
         let debug = format!("{:?}", el.element_type);
         assert!(debug.contains("hi"), "custom type landed: {debug}");
         assert!(debug.contains("count: 2"), "primitive landed: {debug}");
-        assert!(debug.contains("label: \"\""), "unset field kept Default: {debug}");
+        assert!(
+            debug.contains("label: \"\""),
+            "unset field kept Default: {debug}"
+        );
 
         // bare usage goes through Default too
         let el = crate::ui! { Fancy };
         let debug = format!("{:?}", el.element_type);
-        assert!(debug.contains("tag: Tag(\"none\")"), "bare = Default: {debug}");
+        assert!(
+            debug.contains("tag: Tag(\"none\")"),
+            "bare = Default: {debug}"
+        );
 
         // props + children both
         let el = crate::ui! { Fancy count(7) { { crate::ui! { Text "child" } } } };

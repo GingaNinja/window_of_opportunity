@@ -1,6 +1,6 @@
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use super::{hword, lword};
+use super::util::{hword, lword};
 
 #[derive(Debug, PartialEq)]
 pub enum MouseEventType {

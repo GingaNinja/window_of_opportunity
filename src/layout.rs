@@ -4,8 +4,10 @@
 use crate::element::{PropType, Props};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Default)]
 pub enum Direction {
     Row,
+    #[default]
     Column,
 }
 
@@ -23,11 +25,6 @@ pub struct FlexStyle {
     pub grow: bool,
 }
 
-impl Default for Direction {
-    fn default() -> Self {
-        Direction::Column
-    }
-}
 
 impl FlexStyle {
     pub fn from_props(props: &Props) -> Self {

@@ -1,8 +1,8 @@
-use super::get_utf16_vec;
+use super::util::get_utf16_vec;
 use windows::Win32::{Foundation::*, Graphics::Gdi::*};
 
 pub struct DeviceContext {
-    hdc: HDC,
+    pub hdc: HDC,
     ps: Option<PAINTSTRUCT>,
     hwnd: HWND,
     tabs: Vec<i32>,
@@ -12,11 +12,20 @@ impl DeviceContext {
     pub fn get_dc(hwnd: HWND) -> Self {
         let hdc: HDC;
         unsafe {
-            hdc = GetDC(hwnd);
+            hdc = GetDC(Some(hwnd));
         }
         DeviceContext {
-            hwnd: hwnd,
-            hdc: hdc,
+            hwnd,
+            hdc,
+            ps: None,
+            tabs: Vec::new(),
+        }
+    }
+
+    pub fn with_dc(hwnd: HWND, hdc: HDC) -> Self {
+        Self {
+            hwnd,
+            hdc,
             ps: None,
             tabs: Vec::new(),
         }
@@ -33,7 +42,7 @@ impl DeviceContext {
             hdc = BeginPaint(hwnd, &mut ps);
         }
         DeviceContext {
-            hdc: hdc,
+            hdc,
             ps: Some(ps),
             hwnd,
             tabs: Vec::new(),
@@ -117,7 +126,7 @@ impl DeviceContext {
                 self.hdc,
                 x,
                 y,
-                &mut get_utf16_vec(text)[..],
+                &get_utf16_vec(text)[..],
                 Some(&self.tabs[..]),
                 0,
             );
@@ -138,7 +147,7 @@ impl Drop for DeviceContext {
         unsafe {
             match self.ps {
                 None => {
-                    ReleaseDC(self.hwnd, self.hdc);
+                    ReleaseDC(Some(self.hwnd), self.hdc);
                 }
                 Some(ps) => {
                     let _ = EndPaint(self.hwnd, &ps);
@@ -177,7 +186,7 @@ impl Pen {
 impl Drop for Pen {
     fn drop(&mut self) {
         unsafe {
-            let _ = DeleteObject(self.handle);
+            let _ = DeleteObject(HGDIOBJ(self.handle.0));
         }
     }
 }
