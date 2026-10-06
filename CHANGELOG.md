@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/GingaNinja/window_of_opportunity/compare/v0.3.3...v0.4.0) - 2026-10-06
+
+### Added
+
+- win32 (without image)
+
+### Fixed
+
+- full row select for listview, removal of extra space before first item, and better handling of repaint
+- fix the registry code and add placeholder for input on win32
+- bubble up button clicks
+- don't use handler id 0 which collides with unused handlers
+
+### Other
+
+- bring back the list in simples example
+- measure row-height based on font size
+- capture the height of the row item
+- paint the item
+- add one single column with the correct width
+- initial listview ownerdraw
+- handle row_height of the listview
+- add basics of the list
+- handle input for win32
+- add grow(true) to simplest div to make layout options clear
+- if user resized window, use new size for arranging
+- add colour to win32 divs
+- build also on windows
+- update readme with new win32 stuff, and build in github
+- handle standard WM_DESTROY for quit
+- Merge branch 'win32' of github.com:GingaNinja/window_of_opportunity into win32
+- update win32 to work with the libary
+- move macos specific code to separate module
+- separate logic of state vs platform (cacao)
+
 ## [0.3.3](https://github.com/GingaNinja/window_of_opportunity/compare/v0.3.2...v0.3.3) - 2026-09-26
 
 ### Fixed
