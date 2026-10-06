@@ -2,12 +2,12 @@
 
 A WIP, aiming to implement a react style library for creating native (as in, using the actual OS primitives) GUIs. 
 
-Currently targetting Macos with AppKit (using Cacao under the hood), but wanting to add some win32 waiting in the sidelines.
+Currently targetting Win32 directly via the windows crate, and Macos with AppKit (using Cacao under the hood).
 
 ## Features
 
 * Input boxes support internationalization because they are the native input boxes.
-* Small binaries - the todos example compiles to 291kb for Windows, and 1.3Mb for Mac, in release.
+* Small binaries - the todos example compiles to 221kb for Windows, and 1.3Mb for Mac, in release.
 
 ## Getting started
 
