@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/GingaNinja/window_of_opportunity/compare/v0.4.0...v0.4.1) - 2026-10-06
+
+### Fixed
+
+- update readme info
+
 ## [0.4.0](https://github.com/GingaNinja/window_of_opportunity/compare/v0.3.3...v0.4.0) - 2026-10-06
 
 ### Added
