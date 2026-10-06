@@ -43,19 +43,19 @@ impl Component for Pane {
         if children.is_empty() {
             ui! { Div {
                     { Button on_click(switch)  {{ Text text.to_string()}}}
-                    // { List rows(2usize) on_display_item(|ctx, row| {
-                    //     // rows are element trees like any other — styled with
-                    //     // the same props. This one reads state (the Pane's
-                    //     // `first` slot), so toggling the button re-rows the list.
-                    //     let first = ctx.use_state("first", || true);
-                    //     let items = if first { ["one", "two"] } else { ["ein", "zwei"] };
-                    //     let color = if row == 0 { "blue" } else { "green" };
-                    //     ui! {
-                    //         Div height(24.) padding(4.) background(color) {
-                    //             { Text format!("row {row}: {}", items[row]) }
-                    //         }
-                    //     }
-                    // }) }
+                    { List rows(2usize) on_display_item(|ctx, row| {
+                        // rows are element trees like any other — styled with
+                        // the same props. This one reads state (the Pane's
+                        // `first` slot), so toggling the button re-rows the list.
+                        let first = ctx.use_state("first", || true);
+                        let items = if first { ["one", "two"] } else { ["ein", "zwei"] };
+                        let color = if row == 0 { "blue" } else { "green" };
+                        ui! {
+                            Div height(24.) padding(4.) background(color) {
+                                { Text format!("row {row}: {}", items[row]) }
+                            }
+                        }
+                    }) }
                 }
             }
         } else {
