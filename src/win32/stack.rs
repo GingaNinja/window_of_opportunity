@@ -92,10 +92,11 @@ pub fn arrange(el: &Element, widget: &mut Widget, area: Rect) {
         .sum::<i32>()
         + gap * (el.children.len().saturating_sub(1) as i32);
     let inner_main = if main_is_row { inner.w } else { inner.h };
-    let slack = (inner_main - total_main).max(0); // containment: overflow clips
-
+    let slack = inner_main - total_main; // overflow means the last grow will shrink
     // the LAST grow child absorbs all slack (matching the constraint
-    // version's required end-pin, which stretches exactly one box)
+    // version's required end-pin, which stretches exactly one box) —
+    // INCLUDING negative slack: on overflow the one elastic box shrinks,
+    // floored at zero (negative rects don't survive SetWindowPos)
     let last_grow = el
         .children
         .iter()
@@ -108,7 +109,7 @@ pub fn arrange(el: &Element, widget: &mut Widget, area: Rect) {
         let (nw, nh) = naturals[index];
         let mut main = if main_is_row { nw } else { nh };
         if Some(index) == last_grow {
-            main += slack;
+            main = (main + slack).max(0);
         }
 
         let (bx, by, bw, bh) = if main_is_row {
@@ -176,8 +177,9 @@ pub fn natural(el: &Element, widget: &Widget) -> (i32, i32) {
         ) => {
             // The uniform report-row height the small-image-list trick
             // gives the control (see sync_lists) — sized so the full item
-            // count is visible.
-            (80, rows.len() as i32 * row_height + 2)
+            // count is visible. The +2 is PER ROW: the control's item
+            // spacing, added to every row (not once to the whole list).
+            (80, rows.len() as i32 * (row_height + 2))
         }
         _ => (80, 24),
     };
