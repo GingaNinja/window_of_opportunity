@@ -5,7 +5,8 @@
 // don't exist in painted rows — the documented capability gap).
 //
 // Geometry MIRRORS stack::arrange (direction, gap, padding, fixed sizes,
-// cross-axis stretch, grow = last grow child absorbs the slack) but
+// cross-axis stretch, grow = last grow child absorbs ALL the slack —
+// growing AND shrinking on overflow) but
 // measures from the DC instead of widgets — rows have no widgets. When the
 // painting semantics settle, factor the shared box computation out of
 // arrange so the two walks can't drift.
@@ -93,10 +94,12 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect) {
                 .sum::<i32>()
                 + gap * (el.children.len().saturating_sub(1) as i32);
             let inner_main = if main_is_row { inner.w } else { inner.h };
-            let slack = (inner_main - total_main).max(0);
+            let slack = inner_main - total_main; // overflow: the grow child shrinks
 
             // the LAST grow child absorbs all slack (the required end-pin
-            // of the constraint version, stack::arrange's rule)
+            // of the constraint version, stack::arrange's rule) — negative
+            // slack included, floored at zero (mirror of arrange, which
+            // the header above keeps us honest about)
             let last_grow = el
                 .children
                 .iter()
@@ -108,7 +111,7 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect) {
                 let (nw, nh) = naturals[index];
                 let mut main = if main_is_row { nw } else { nh };
                 if Some(index) == last_grow {
-                    main += slack;
+                    main = (main + slack).max(0);
                 }
 
                 let (bx, by, bw, bh) = if main_is_row {

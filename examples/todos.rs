@@ -1,3 +1,4 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use std::{cell::RefCell, rc::Rc};
 
 use window_of_opportunity::{app::Application, component::Component, ui};
