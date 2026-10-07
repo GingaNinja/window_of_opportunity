@@ -13,10 +13,8 @@
 
 use windows::Win32::Foundation::{RECT, SIZE};
 use windows::Win32::Graphics::Gdi::{
-    CreateFontIndirectW, CreateSolidBrush, DEFAULT_GUI_FONT, DT_END_ELLIPSIS, DT_SINGLELINE,
-    DT_VCENTER, DeleteObject, DrawTextW, FillRect, GetDeviceCaps, GetObjectW, GetStockObject,
-    GetTextColor, GetTextExtentPoint32W, HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW, LOGPIXELSY,
-    SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
+    CreateSolidBrush, DT_END_ELLIPSIS, DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawTextW,
+    FillRect, GetTextExtentPoint32W, HBRUSH, HDC,
 };
 
 use crate::{
@@ -24,7 +22,7 @@ use crate::{
     layout::{Direction, FlexStyle},
 };
 
-use super::{app::color_ref, stack::Rect, util::get_utf16_vec};
+use super::{app::color_ref, font::TextGuard, stack::Rect, util::get_utf16_vec};
 
 /// Paints an element tree into `area`. The walk mirrors stack::arrange:
 /// containers stack their children (column/row, gap, padding), leaves draw.
@@ -41,12 +39,14 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect) {
 
     match &el.element_type {
         ElementType::Text(text) => unsafe {
-            SetBkMode(hdc, TRANSPARENT);
-            let old_text_color = GetTextColor(hdc);
-            if let Some(fg) = el.props.get_string(PropType::Color) {
-                SetTextColor(hdc, color_ref(fg));
-            }
-            let _font = FontGuard::apply(hdc, el); // font_size prop, in and out
+            // font, color and the transparent backdrop are the guard's
+            // job — drop restores all three, so the shared row DC (every
+            // row, every draw callback) inherits nothing
+            let _text = TextGuard::apply(
+                hdc,
+                el.props.get_float(PropType::FontSize),
+                el.props.get_string(PropType::Color).map(color_ref),
+            );
             let mut wide = get_utf16_vec(text);
             let mut rect = to_rect(area);
             DrawTextW(
@@ -55,7 +55,6 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect) {
                 &mut rect,
                 DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
             );
-            SetTextColor(hdc, old_text_color);
         },
 
         ElementType::Button | ElementType::Input | ElementType::Image | ElementType::List => {
@@ -149,7 +148,7 @@ pub fn natural_size(hdc: HDC, el: &Element) -> (i32, i32) {
         ElementType::Text(text) => {
             // measure under the same font painting will use — the row
             // heights derived from this depend on it
-            let _font = FontGuard::apply(hdc, el);
+            let _text = TextGuard::apply(hdc, el.props.get_float(PropType::FontSize), None);
             let (tw, th) = text_extent(hdc, text);
             (tw + 8, th + 4) // label breathing room
         }
@@ -186,63 +185,6 @@ pub fn natural_size(hdc: HDC, el: &Element) -> (i32, i32) {
         h = fh as i32;
     }
     (w.max(1), h.max(1))
-}
-
-/// Runs with the element's font_size prop applied to the DC — an HFONT at
-/// the requested size (POINTS, like macOS's `Font::system`), cloned from
-/// the system UI font's face/weight so it looks native at any size. The
-/// DC is the control's, shared across rows: drop restores whatever was
-/// selected and frees the font. Without the prop nothing changes — at
-/// custom-draw time the control's own font is already selected.
-struct FontGuard {
-    hdc: HDC,
-    font: Option<HFONT>,
-    previous: Option<HGDIOBJ>,
-}
-
-impl FontGuard {
-    fn apply(hdc: HDC, el: &Element) -> Self {
-        let Some(size) = el.props.get_float(PropType::FontSize) else {
-            return Self {
-                hdc,
-                font: None,
-                previous: None,
-            };
-        };
-        unsafe {
-            // points → pixels (96 DPI ⇒ 1pt = 1.33px)
-            let pixels =
-                ((size * GetDeviceCaps(Some(hdc), LOGPIXELSY) as f64 / 72.0).round()) as i32;
-            // the stock GUI font's face and weight, at the requested size
-            let mut lf = LOGFONTW::default();
-            GetObjectW(
-                GetStockObject(DEFAULT_GUI_FONT),
-                std::mem::size_of::<LOGFONTW>() as i32,
-                Some(&mut lf as *mut LOGFONTW as *mut _),
-            );
-            lf.lfHeight = -pixels; // negative = character height in pixels
-            let font = CreateFontIndirectW(&lf);
-            let previous = SelectObject(hdc, font.into());
-            Self {
-                hdc,
-                font: Some(font),
-                previous: Some(previous),
-            }
-        }
-    }
-}
-
-impl Drop for FontGuard {
-    fn drop(&mut self) {
-        unsafe {
-            if let Some(previous) = self.previous {
-                SelectObject(self.hdc, previous);
-            }
-            if let Some(font) = self.font {
-                let _ = DeleteObject(font.into());
-            }
-        }
-    }
 }
 
 /// Fills an area with the named color's brush — the brush is created and

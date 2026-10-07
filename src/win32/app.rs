@@ -15,6 +15,7 @@
 use std::{
     any::Any,
     cell::{Cell, RefCell},
+    collections::HashMap,
     mem,
     rc::Rc,
     sync::atomic::{AtomicIsize, Ordering},
@@ -25,7 +26,7 @@ use windows::{
         Foundation::*,
         Graphics::Gdi::{
             CreateCompatibleBitmap, CreateSolidBrush, DeleteObject, FillRect, GetDC, HBITMAP,
-            HBRUSH, HDC, InvalidateRect, SetBkMode, TRANSPARENT,
+            HBRUSH, HDC, HFONT, InvalidateRect, ReleaseDC, SetBkMode, TRANSPARENT,
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::{
@@ -51,10 +52,11 @@ use crate::{
     element::{Element, ElementType, PropType, button_label, window_spec},
     reconcile,
     state::{Ctx, Event, Handler, Handlers, State},
-    win32::dc,
+    win32::dc::DeviceContext,
 };
 
 use super::{
+    font::{create_font, scaled_pixels},
     paint,
     stack::{self, Rect},
     util::{get_utf16_vec, load_cursor, load_icon},
@@ -139,6 +141,7 @@ impl Application {
                 hwnd: HWND(std::ptr::null_mut()), // filled in right after creation
                 on_app_message,
                 last_requested_size: Cell::new(None),
+                fonts: RefCell::new(HashMap::new()),
             }));
 
             // hand the Rc to the window via lpParam — WM_NCCREATE parks it
@@ -353,6 +356,34 @@ pub(crate) struct AppState {
     /// the client size the last render requested — the controlled-size rule
     /// (writes happen when the request changes, not when actual drifts)
     last_requested_size: Cell<Option<(i32, i32)>>,
+    /// WM_SETFONT fonts, keyed by pixel height: one HFONT per size shared
+    /// by every control that asks (equal sizes share a handle — a control
+    /// can only wear ONE font, but each control picks its own). Controls
+    /// only BORROW these; freed at teardown (see Drop below).
+    ///
+    /// Entries are never removed while the app runs — deliberate: handles
+    /// are shared, so removing on a font_size change could free a font a
+    /// sibling control still wears. Growth is bounded by the DISTINCT
+    /// pixel heights ever requested (renders and patches all hit the
+    /// cache — the key is the rounded integer, so drifting fractional
+    /// sizes collapse), not by render count. Only worth revisiting if an
+    /// app requests thousands of distinct heights in one session — then
+    /// evict keys the current tree's font_size props don't reference.
+    fonts: RefCell<HashMap<i32, HFONT>>,
+}
+
+/// WM_SETFONT fonts must outlive the controls that wear them, so this
+/// drops root_widget (Widget::drop destroys the windows) BEFORE freeing
+/// the fonts the controls reference.
+impl Drop for AppState {
+    fn drop(&mut self) {
+        self.root_widget = None;
+        for font in self.fonts.get_mut().values() {
+            unsafe {
+                let _ = DeleteObject((*font).into());
+            }
+        }
+    }
 }
 
 impl AppState {
@@ -480,23 +511,27 @@ impl AppState {
                         .collect(),
                 }
             }
-            ElementType::Text(text) => Widget::Label {
+            ElementType::Text(text) => {
                 // SS_NOTIFY lets accessibility tools (and the mouse)
                 // interact with the label; SS_LEFT is the default (0).
-                hwnd: self.create_control(w!("static"), text, 0x0100, parent), // SS_NOTIFY-0x0100
-            },
+                let hwnd = self.create_control(w!("static"), text, 0x0100, parent); // SS_NOTIFY-0x0100
+                self.apply_font(hwnd, el);
+                Widget::Label { hwnd }
+            }
             ElementType::Button => {
                 // Handlers live on widgets (the InputDelegate model,
                 // everywhere): WM_COMMAND's lparam IS the control's hwnd, so
                 // the event source resolves itself. The cacao side's id
                 // registry exists only for its Send boundary.
+                let hwnd = self.create_control(
+                    w!("button"),
+                    &button_label(el),
+                    BS_PUSHBUTTON as u32 | WS_TABSTOP.0,
+                    parent,
+                );
+                self.apply_font(hwnd, el);
                 Widget::Button {
-                    hwnd: self.create_control(
-                        w!("button"),
-                        &button_label(el),
-                        BS_PUSHBUTTON as u32 | WS_TABSTOP.0,
-                        parent,
-                    ),
+                    hwnd,
                     on_click: match el.handlers.get("on_click") {
                         Some(Handler::Simple(event)) => Some(event.clone()),
                         _ => None,
@@ -509,6 +544,7 @@ impl AppState {
                 // widget (the text comes from the control at fire time); the
                 // id registry is for payload-free dispatch.
                 let hwnd = self.create_control(w!("EDIT"), "", WS_BORDER.0 | WS_TABSTOP.0, parent);
+                self.apply_font(hwnd, el);
                 if let Some(value) = el.props.get_string(PropType::Value) {
                     set_window_text(hwnd, value);
                 }
@@ -525,7 +561,7 @@ impl AppState {
                 // macOS delegate: built at render, served to visible rows.
                 let rows = reconcile::snapshot_rows(&self.state, el);
                 let row_height = {
-                    let dc = dc::DeviceContext::get_dc(parent);
+                    let dc = DeviceContext::from(parent);
                     rows.iter().map(|r| paint::natural_size(dc.hdc, r).1).max()
                 }
                 .unwrap_or(20);
@@ -684,6 +720,50 @@ impl AppState {
         }
     }
 
+    /// WM_SETFONT: the control wears the font its element's font_size prop
+    /// asks for — POINTS (like macOS's `Font::system`) converted to pixels
+    /// at this DC's DPI. The same math TextGuard paints list rows with (see
+    /// font.rs), so what's measured is what's drawn. Handles come from a
+    /// size-keyed cache (equal sizes share one HFONT); without the prop
+    /// nothing is sent and the control keeps its default font.
+    fn apply_font(&self, hwnd: HWND, el: &Element) {
+        let Some(points) = el.props.get_float(PropType::FontSize) else {
+            return; // no font_size: the control keeps its default font
+        };
+        let pixels = unsafe {
+            let hdc = GetDC(Some(hwnd));
+            let pixels = scaled_pixels(points, hdc);
+            let _ = ReleaseDC(Some(hwnd), hdc);
+            pixels
+        };
+        let font = *self
+            .fonts
+            .borrow_mut()
+            .entry(pixels)
+            .or_insert_with(|| create_font(pixels));
+        unsafe {
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETFONT,
+                Some(WPARAM(font.0 as usize)),
+                Some(LPARAM(1)), // redraw now
+            );
+        }
+    }
+
+    /// Reconcile the font like any prop: a patched control re-wears its
+    /// font when (and only when) font_size actually changed — an unchanged
+    /// size is a cache hit. Removing the prop keeps the last font in place
+    /// (the control's original default is gone after our first WM_SETFONT)
+    /// — TODO(font): flip back to the stock GUI font then.
+    fn refresh_font(&self, old_el: &Element, new_el: &Element, hwnd: HWND) {
+        if old_el.props.get_float(PropType::FontSize) != new_el.props.get_float(PropType::FontSize)
+            && new_el.props.get_float(PropType::FontSize).is_some()
+        {
+            self.apply_font(hwnd, new_el);
+        }
+    }
+
     /// Reconciliation, same shape as the macOS `patch`: reuse widgets whose
     /// elements line up, refresh props and handlers in place.
     fn patch(&self, widget: &mut Widget, old_el: &Element, new_el: &Element) {
@@ -692,6 +772,7 @@ impl AppState {
                 self.patch_container(widget, old_el, new_el);
             }
             (Widget::Button { hwnd, on_click }, ElementType::Button) => {
+                self.refresh_font(old_el, new_el, *hwnd);
                 // reconcile the title
                 if button_label(old_el) != button_label(new_el) {
                     let title = get_utf16_vec(&button_label(new_el));
@@ -707,6 +788,7 @@ impl AppState {
                 };
             }
             (Widget::Label { hwnd }, ElementType::Text(text)) => {
+                self.refresh_font(old_el, new_el, *hwnd);
                 // display-only: no cursor to protect, just refresh
                 let title = get_utf16_vec(text);
                 unsafe {
@@ -714,6 +796,7 @@ impl AppState {
                 }
             }
             (Widget::Input { hwnd, on_change }, ElementType::Input) => {
+                self.refresh_font(old_el, new_el, *hwnd);
                 // controlled value: write only what actually differs — the
                 // caret must never move under the user (same contract as the
                 // cacao side)
@@ -748,7 +831,7 @@ impl AppState {
                 // is visible, same as the macOS reload() pass
                 *rows = reconcile::snapshot_rows(&self.state, new_el);
                 let measured = {
-                    let dc = dc::DeviceContext::get_dc(*hwnd);
+                    let dc = DeviceContext::from(*hwnd);
                     rows.iter().map(|r| paint::natural_size(dc.hdc, r).1).max()
                 }
                 .unwrap_or(20);

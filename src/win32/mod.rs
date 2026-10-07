@@ -8,8 +8,9 @@
 pub mod app;
 pub(crate) mod widgets;
 
-mod stack;
+mod font;
 mod paint;
+mod stack;
 mod util;
 #[allow(dead_code)]
 mod win_create_args;

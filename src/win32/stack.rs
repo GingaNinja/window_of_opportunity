@@ -17,17 +17,17 @@
 // ---------------------------------------------------------------------------
 
 use windows::Win32::{
-    Foundation::{HWND, SIZE},
-    Graphics::Gdi::{GetDC, GetTextExtentPoint32W, ReleaseDC},
+    Foundation::HWND,
     UI::WindowsAndMessaging::{GetParent, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos},
 };
 
 use crate::{
-    element::{Element, ElementType, button_label},
+    element::{Element, ElementType, PropType, button_label},
     layout::{Direction, FlexStyle},
+    win32::dc::DeviceContext,
 };
 
-use super::{util::get_utf16_vec, widgets::Widget};
+use super::widgets::Widget;
 
 /// A layout box (client-area coordinates).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -143,8 +143,9 @@ pub fn natural(el: &Element, widget: &Widget) -> (i32, i32) {
     let pad = style.padding as i32;
 
     let (mut w, mut h) = match (widget, &el.element_type) {
-        (Widget::Button { hwnd, .. }, _) => measure_button(*hwnd, &button_label(el)),
-        (Widget::Label { hwnd }, ElementType::Text(text)) => measure_text(*hwnd, text),
+        (Widget::Button { hwnd, .. }, _) => measure_button(*hwnd, el, &button_label(el)),
+        (Widget::Label { hwnd }, ElementType::Text(text)) => measure_text(*hwnd, el, text),
+        (Widget::Input { hwnd, .. }, _) => measure_input(*hwnd, el),
         (Widget::Container { children, .. }, _) => {
             let gap = style.gap as i32;
             let (mut main, mut cross) = (0, 0);
@@ -212,25 +213,39 @@ fn place_hwnd(hwnd: HWND, x: i32, y: i32, w: i32, h: i32) {
     }
 }
 
-fn measure_text(hwnd: HWND, text: &str) -> (i32, i32) {
-    let (w, h) = text_extent(hwnd, text);
+fn measure_text(hwnd: HWND, el: &Element, text: &str) -> (i32, i32) {
+    let (w, h) = text_extent(hwnd, el, text);
     (w + 2, h + 4)
 }
 
-fn measure_button(hwnd: HWND, text: &str) -> (i32, i32) {
+fn measure_button(hwnd: HWND, el: &Element, text: &str) -> (i32, i32) {
     // text extent + push-button chrome (the step-2 approximation of
     // BCM_GETIDEALSIZE, which arrives with the common-controls work)
-    let (w, h) = text_extent(hwnd, text);
+    let (w, h) = text_extent(hwnd, el, text);
     (w + 32, h + 14)
 }
 
-fn text_extent(hwnd: HWND, text: &str) -> (i32, i32) {
-    let wide = get_utf16_vec(text);
-    unsafe {
-        let hdc = GetDC(Some(hwnd));
-        let mut size = SIZE::default();
-        let _ = GetTextExtentPoint32W(hdc, &wide, &mut size);
-        let _ = ReleaseDC(Some(hwnd), hdc);
-        (size.cx, size.cy)
-    }
+/// An input hugs its line height, NOT its text — the value is often empty
+/// and typing must never resize the box. The height comes from the
+/// font's metrics (tmHeight under TextGuard — the same font WM_SETFONT
+/// puts on the control), so font_size moves the box exactly as it moves
+/// the text. Width stays the leaf default unless a width prop says
+/// otherwise (an input's width is the layout's business, not its text's).
+fn measure_input(hwnd: HWND, el: &Element) -> (i32, i32) {
+    let dc = DeviceContext::from(hwnd);
+    // height from the FONT's line height, not the text (see above) — the
+    // measure call scopes the element's font_size itself
+    let tm = dc.text_metrics(el.props.get_float(PropType::FontSize));
+    // + edit chrome: the WS_BORDER frame + the control's text margins
+    (80, tm.tmHeight + 8)
+}
+
+/// Text extent under the element's own font — the measure call applies the
+/// font_size prop exactly as painting does, so a control is measured at
+/// the size it draws. Without the prop the DC's current font measures
+/// (the control's default).
+fn text_extent(hwnd: HWND, el: &Element, text: &str) -> (i32, i32) {
+    let dc = DeviceContext::from(hwnd);
+    let size = dc.text_extent(text, el.props.get_float(PropType::FontSize));
+    (size.cx, size.cy)
 }
