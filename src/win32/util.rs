@@ -2,8 +2,8 @@
 //! loaders and word extraction for message params.
 
 use windows::{
-    core::*,
     Win32::{Foundation::*, UI::WindowsAndMessaging::*},
+    core::*,
 };
 
 pub fn load_icon(inst: HINSTANCE, name: PCWSTR) -> Result<HICON> {

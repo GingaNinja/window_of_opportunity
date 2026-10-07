@@ -1,6 +1,9 @@
-use super::util::get_utf16_vec;
+use super::{font::TextGuard, util::get_utf16_vec};
 use windows::Win32::{Foundation::*, Graphics::Gdi::*};
 
+/// A wrapper around HDC, which gives us drop capability
+/// so we can call ReleaseDC automatically.
+/// Also has some useful methods for using with HDC
 pub struct DeviceContext {
     pub hdc: HDC,
     ps: Option<PAINTSTRUCT>,
@@ -8,29 +11,19 @@ pub struct DeviceContext {
     tabs: Vec<i32>,
 }
 
-impl DeviceContext {
-    pub fn get_dc(hwnd: HWND) -> Self {
-        let hdc: HDC;
-        unsafe {
-            hdc = GetDC(Some(hwnd));
-        }
+impl From<HWND> for DeviceContext {
+    fn from(value: HWND) -> Self {
+        let hdc = unsafe { GetDC(Some(value)) };
         DeviceContext {
-            hwnd,
+            hwnd: value,
             hdc,
             ps: None,
             tabs: Vec::new(),
         }
     }
+}
 
-    pub fn with_dc(hwnd: HWND, hdc: HDC) -> Self {
-        Self {
-            hwnd,
-            hdc,
-            ps: None,
-            tabs: Vec::new(),
-        }
-    }
-
+impl DeviceContext {
     pub fn set_tabs(&mut self, tabs: Vec<i32>) {
         self.tabs = tabs;
     }
@@ -133,12 +126,29 @@ impl DeviceContext {
         }
     }
 
-    pub fn text_metrics(&self) -> TEXTMETRICW {
+    /// Text metrics under the given font_size (POINTS) — the font is
+    /// scoped inside this call (a TextGuard), so the restore always lands
+    /// before the DC is released, whatever the caller does with its own
+    /// drop order. `None` measures with the DC's current font.
+    pub fn text_metrics(&self, font_size: Option<f64>) -> TEXTMETRICW {
+        let _text = TextGuard::apply(self.hdc, font_size, None);
         let mut tm = TEXTMETRICW::default();
         unsafe {
             let _ = GetTextMetricsW(self.hdc, &mut tm);
         }
         tm
+    }
+
+    /// Text extent under the given font_size (POINTS), same scoping as
+    /// `text_metrics`. `None` measures with the DC's current font.
+    pub fn text_extent(&self, text: &str, font_size: Option<f64>) -> SIZE {
+        let _text = TextGuard::apply(self.hdc, font_size, None);
+        let wide = get_utf16_vec(text);
+        let mut size = SIZE::default();
+        unsafe {
+            let _ = GetTextExtentPoint32W(self.hdc, &wide, &mut size);
+        }
+        size
     }
 }
 

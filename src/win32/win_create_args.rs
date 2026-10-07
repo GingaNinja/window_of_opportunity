@@ -1,6 +1,6 @@
 use windows::{
-    core::*,
     Win32::{Foundation::*, UI::WindowsAndMessaging::*},
+    core::*,
 };
 
 use super::util::load_cursor;
