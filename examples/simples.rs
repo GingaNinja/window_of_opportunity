@@ -111,9 +111,9 @@ impl Component for Window {
             Window width(w) height(h) title(title)
                    on_resize(|state, w, h|
                        state.update("window/size", |s: &mut (f64, f64)| *s = (w, h))) {
-                { Div direction("column") gap(10.) padding(16.) {
+                { Div direction("column") gap(10.) grow(true) padding(10., 20., 30., 40.)  { // note, we have t, r, b, l padding
                     { Pane }
-                    { Div height(80.) {} }
+                    { Div height(80.) background("black") {} }
                     { Div direction("row") gap(10.) height(60.) {
                         { Button { Text "Hello, and this should mean a bigger button" } }
                         { Button { Text "Two" } }
@@ -121,7 +121,7 @@ impl Component for Window {
                     } }
                     { Counter thing("blah".into())} // a prop into counter
                     { Typing }
-                    { Div height(40.) background("green") {} } // grow(true) here would be 0 tall: nothing to absorb in hug mode
+                    { Div  background("green") grow(true) {} }
                 } }
             }
         }

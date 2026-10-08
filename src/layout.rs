@@ -3,8 +3,7 @@
 // ---------------------------------------------------------------------------
 use crate::element::{PropType, Props};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum Direction {
     Row,
     #[default]
@@ -19,12 +18,11 @@ pub enum Direction {
 pub struct FlexStyle {
     pub direction: Direction,
     pub gap: f64,
-    pub padding: f64,
+    pub padding: (f64, f64, f64, f64),
     pub width: Option<f64>,
     pub height: Option<f64>,
     pub grow: bool,
 }
-
 
 impl FlexStyle {
     pub fn from_props(props: &Props) -> Self {
@@ -34,7 +32,7 @@ impl FlexStyle {
                 _ => Direction::Column,
             },
             gap: props.get_float(PropType::Gap).unwrap_or_default(),
-            padding: props.get_float(PropType::Padding).unwrap_or_default(),
+            padding: props.get_float4(PropType::Padding).unwrap_or_default(),
             width: props.get_float(PropType::Width),
             height: props.get_float(PropType::Height),
             grow: props.get_bool(PropType::Grow).unwrap_or_default(),
