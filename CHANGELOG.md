@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/GingaNinja/window_of_opportunity/compare/v0.4.3...v0.5.0) - 2026-10-08
+
+### Fixed
+
+- listview height is now calculated correctly for macos
+- padding is top, right, bottom, left, or other combos
+- add left/right padding to listview items as the selection overlay obscures the items
+- items shrink, and don't just grow, if slack is negative.
+
 ## [0.4.3](https://github.com/GingaNinja/window_of_opportunity/compare/v0.4.2...v0.4.3) - 2026-10-07
 
 ### Added
