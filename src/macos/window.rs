@@ -9,10 +9,7 @@ use cacao::{
     objc::{msg_send, sel, sel_impl},
 };
 
-use crate::{
-    app::AppState,
-    state::Handler,
-};
+use crate::{app::AppState, state::Handler};
 
 /// The window's delegate: its only job is syncing user resizes into state
 /// (window → state), so the next render requests exactly the size the user
