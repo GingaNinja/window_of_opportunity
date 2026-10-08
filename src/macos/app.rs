@@ -643,7 +643,7 @@ impl AppState {
 
                     // main axis: stack top-to-bottom
                     constraints.push(match prev_bottom.take() {
-                        None => a.top.constraint_equal_to(&view.top).offset(style.padding),
+                        None => a.top.constraint_equal_to(&view.top).offset(style.padding.0),
                         Some(prev) => a.top.constraint_equal_to(&prev).offset(style.gap),
                     });
                     prev_bottom = Some(a.bottom.clone());
@@ -652,15 +652,23 @@ impl AppState {
                     constraints.push(
                         a.leading
                             .constraint_equal_to(&view.leading)
-                            .offset(style.padding),
+                            .offset(style.padding.3),
                     );
                     constraints.push(
                         a.trailing
                             .constraint_equal_to(&view.trailing)
-                            .offset(-style.padding),
+                            .offset(-style.padding.1),
                     );
 
                     if let Some(h) = child_style.height {
+                        constraints.push(a.height.constraint_equal_to_constant(h));
+                    } else if let Widget::List(control) = child_widget {
+                        // Hug a list from its rows: the List's anchors belong
+                        // to its NSScrollView, which publishes NO intrinsic
+                        // height (the row math lives inside the table) —
+                        // without this pin a hugging container collapses the
+                        // list. The win32 `natural_size` twin.
+                        let h = list_rows_height(control);
                         constraints.push(a.height.constraint_equal_to_constant(h));
                     }
                     if let Some(w) = child_style.width {
@@ -680,14 +688,14 @@ impl AppState {
                     constraints.push(
                         bottom
                             .constraint_less_than_or_equal_to(&view.bottom)
-                            .offset(-style.padding),
+                            .offset(-style.padding.2),
                     );
                     // the fill/hug equality: required for grow, optional
                     // otherwise (yields to intrinsic sizes, so slack sits at
                     // the end of a sized container like flexbox's default)
                     let pin = bottom
                         .constraint_equal_to(&view.bottom)
-                        .offset(-style.padding);
+                        .offset(-style.padding.2);
                     constraints.push(match has_grow {
                         true => pin,
                         false => optional(pin),
@@ -707,7 +715,7 @@ impl AppState {
                         None => a
                             .leading
                             .constraint_equal_to(&view.leading)
-                            .offset(style.padding),
+                            .offset(style.padding.3),
                         Some(prev) => a.leading.constraint_equal_to(&prev).offset(style.gap),
                     });
                     prev_trailing = Some(a.trailing.clone());
@@ -716,14 +724,17 @@ impl AppState {
                     // NB: a Row needs a height from somewhere — a height prop,
                     // grow within a parent column, or the root. An unsized row
                     // is ambiguous.
-                    constraints.push(a.top.constraint_equal_to(&view.top).offset(style.padding));
+                    constraints.push(a.top.constraint_equal_to(&view.top).offset(style.padding.0));
                     constraints.push(
                         a.bottom
                             .constraint_equal_to(&view.bottom)
-                            .offset(-style.padding),
+                            .offset(-style.padding.2),
                     );
 
                     if let Some(h) = child_style.height {
+                        constraints.push(a.height.constraint_equal_to_constant(h));
+                    } else if let Widget::List(control) = child_widget {
+                        let h = list_rows_height(control);
                         constraints.push(a.height.constraint_equal_to_constant(h));
                     }
                     if let Some(w) = child_style.width {
@@ -741,11 +752,11 @@ impl AppState {
                     constraints.push(
                         trailing
                             .constraint_less_than_or_equal_to(&view.trailing)
-                            .offset(-style.padding),
+                            .offset(-style.padding.1),
                     );
                     let pin = trailing
                         .constraint_equal_to(&view.trailing)
-                        .offset(-style.padding);
+                        .offset(-style.padding.1);
                     constraints.push(match has_grow {
                         true => pin,
                         false => optional(pin),
@@ -808,19 +819,16 @@ impl AppState {
                 // reused field's cursor must never move
                 if old_el.props.get_string(PropType::Value)
                     != new_el.props.get_string(PropType::Value)
+                    && let Some(value) = new_el.props.get_string(PropType::Value)
+                    && field.get_value() != *value
                 {
-                    if let Some(value) = new_el.props.get_string(PropType::Value) {
-                        if field.get_value() != *value {
-                            field.set_text(value);
-                        }
-                    }
+                    field.set_text(value);
                 }
                 if old_el.props.get_string(PropType::Placeholder)
                     != new_el.props.get_string(PropType::Placeholder)
+                    && let Some(placeholder) = new_el.props.get_string(PropType::Placeholder)
                 {
-                    if let Some(placeholder) = new_el.props.get_string(PropType::Placeholder) {
-                        field.set_placeholder_text(placeholder);
-                    }
+                    field.set_placeholder_text(placeholder);
                 }
                 // refresh on_change on the delegate
                 if let Some(delegate) = field.delegate.as_ref() {
@@ -835,17 +843,15 @@ impl AppState {
                 // and a state-driven color/font_size must follow state changes
                 if old_el.props.get_string(PropType::Color)
                     != new_el.props.get_string(PropType::Color)
+                    && let Some(txt_color) = new_el.props.get_string(PropType::Color)
                 {
-                    if let Some(txt_color) = new_el.props.get_string(PropType::Color) {
-                        label.set_text_color(color(txt_color));
-                    }
+                    label.set_text_color(color(txt_color));
                 }
                 if old_el.props.get_float(PropType::FontSize)
                     != new_el.props.get_float(PropType::FontSize)
+                    && let Some(font_size) = new_el.props.get_float(PropType::FontSize)
                 {
-                    if let Some(font_size) = new_el.props.get_float(PropType::FontSize) {
-                        label.set_font(Font::system(font_size));
-                    }
+                    label.set_font(Font::system(font_size));
                 }
             }
 
@@ -902,17 +908,23 @@ impl AppState {
         // reconcile the background prop (visual only)
         if old_el.props.get_string(PropType::Background)
             != new_el.props.get_string(PropType::Background)
+            && let Some(bg) = new_el.props.get_string(PropType::Background)
         {
-            if let Some(bg) = new_el.props.get_string(PropType::Background) {
-                view.set_background_color(color(bg));
-            }
+            view.set_background_color(color(bg));
         }
 
         // The shared children-diff skeleton (positional match, replace-on-
         // incompat, append, truncate) with this platform's ops as closures.
         // `view` is re-borrowed shared so both closures can use it.
         let view: &View = view;
-        let mut needs_relayout = flex_changed(old_el, new_el);
+        let mut needs_relayout = flex_changed(old_el, new_el)
+            // a List's rows are render outputs (snapshotted per render) and
+            // its pinned height depends on them — row changes must re-run
+            // the constraint pass even when the props didn't move
+            || new_el
+                .children
+                .iter()
+                .any(|child| matches!(child.element_type, ElementType::List));
         needs_relayout |= reconcile::reconcile_children(
             children,
             &old_el.children,
@@ -1172,12 +1184,25 @@ struct NSRange {
     length: usize,
 }
 
+/// A list's rows-height — measured, because the constrained NSScrollView
+/// publishes no intrinsic height of its own (see container_constraints).
+/// Rows are laid out first so the table reports an honest extent; this is
+/// the macOS twin of win32's `paint::natural_size` over the snapshot rows.
+fn list_rows_height(control: &ListView<ReactiveListView>) -> f64 {
+    control.objc.get(|obj| unsafe {
+        let _: () = msg_send![obj, layoutSubtreeIfNeeded];
+        let size: CGSize = msg_send![obj, fittingSize];
+        size.height
+    })
+}
+
 fn color(name: &str) -> Color {
     match name {
         "blue" => Color::SystemBlue,
         "red" => Color::SystemRed,
         "green" => Color::SystemGreen,
         "gray" => Color::SystemGray,
+        "black" => Color::SystemBlack,
         _ => Color::SystemBrown,
     }
 }
