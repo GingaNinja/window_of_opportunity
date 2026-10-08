@@ -18,6 +18,7 @@
 //! (default "survey"), so the probe can inspect any window:
 //!
 //!     cargo run --example uia_probe -- notepad
+#![cfg(target_os = "windows")]
 
 use std::thread;
 use std::time::{Duration, Instant};
