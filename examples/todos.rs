@@ -90,9 +90,9 @@ impl Component for TodoView {
         let item_count = { items.borrow().len() };
 
         ui! {
-            Div grow(true) {
+            Div gap(10) grow(true) {
                 { Button on_click(add_todo) { Text "Add row" }}
-                { List grow(true)  rows(item_count) on_display_item(|ctx, row| {
+                { List grow(true) rows(item_count) on_display_item(|ctx, row| {
                     let items = ctx.use_state("todos", seed);
                     let item = {
                         let rows = &items.borrow();
@@ -119,7 +119,7 @@ impl Component for Window {
     ) -> Box<window_of_opportunity::element::Element> {
         ui! {
             Window width(400.) height(400.)  {
-                { Div grow(true)  direction("column") background("blue") padding(20.) {
+                { Div direction("column") background("blue") grow(true) padding(20.) {
                     { TodoView }
                 } }
             }
