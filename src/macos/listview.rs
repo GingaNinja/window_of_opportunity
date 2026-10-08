@@ -63,6 +63,12 @@ impl ListViewDelegate for ReactiveListView {
         // a BARE row: no built-in content. A row's content is the element
         // tree mounted by item_for, owned by the row delegate below.
         view.register(REACTIVE_ROW, ReactiveViewRow::default);
+        // Rows size from their mounted row views (our row elements carry
+        // height constraints) — without this the table uses the default
+        // fixed row height AND publishes no usable intrinsic height, so a
+        // hugging container collapses the list (a fixed-size container
+        // hides this because the optional bottom pin stretches it).
+        view.set_uses_automatic_row_heights(true);
         self.view = Some(view);
     }
 
@@ -90,16 +96,16 @@ impl ListViewDelegate for ReactiveListView {
             Err(_) => return view.into_row(),
         };
 
-        if let Some(element) = self.rows.borrow().get(row).cloned() {
-            if let Some(delegate) = view.delegate.as_mut() {
-                // Dropping the previous tree unmounts its views (View::Drop
-                // removes from superview) — clearing the recycled row.
-                // cacao reconstructs this delegate from the view's ivar
-                // pointer when the row is recycled, so the same instance
-                // (and its view handle) returns for each reuse.
-                delegate.content = None;
-                delegate.content = Some(app_state.mount_row(&delegate.view, &element));
-            }
+        if let Some(element) = self.rows.borrow().get(row).cloned()
+            && let Some(delegate) = view.delegate.as_mut()
+        {
+            // Dropping the previous tree unmounts its views (View::Drop
+            // removes from superview) — clearing the recycled row.
+            // cacao reconstructs this delegate from the view's ivar
+            // pointer when the row is recycled, so the same instance
+            // (and its view handle) returns for each reuse.
+            delegate.content = None;
+            delegate.content = Some(app_state.mount_row(&delegate.view, &element));
         }
 
         view.into_row()
