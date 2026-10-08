@@ -193,9 +193,9 @@ pub fn notify(app: &RefCell<AppState>, lparam: LPARAM) -> LRESULT {
                             Some(LPARAM(&mut rect as *mut RECT as isize)),
                         );
                         let area = Rect {
-                            x: rect.left,
+                            x: rect.left + 6, // add some padding for the overlay selection
                             y: rect.top,
-                            w: rect.right - rect.left,
+                            w: rect.right - rect.left - 12, // add some padding for the overlay selection
                             h: rect.bottom - rect.top,
                         };
                         if let Ok(mut app) = app.try_borrow_mut() {
