@@ -53,7 +53,7 @@ jobs:
 
       - name: Screenshot example (macOS)
         if: runner.os == 'macOS'
-        run: ./scripts/capture-screenshot.sh "target/release/examples/$EXAMPLE" dist/screenshot.png
+        run: bash scripts/capture-screenshot.sh "target/release/examples/$EXAMPLE" dist/screenshot.png
 
       - uses: actions/upload-artifact@v7
         with:
