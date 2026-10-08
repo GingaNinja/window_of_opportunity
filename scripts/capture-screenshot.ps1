@@ -37,6 +37,9 @@ try {
     # Give the app time to create and lay out its window.
     Start-Sleep -Seconds $SettleSeconds
     $proc.Refresh()
+    if ($proc.HasExited) {
+        throw "$Exe exited early (code $($proc.ExitCode)) - refusing to screenshot a dead app"
+    }
 
     # Default to the whole screen, narrowed to the window rect if we find one.
     $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds

@@ -1,6 +1,7 @@
-// Prints the CGWindowID of the named on-screen window (matched by owner
-// process name). Used by scripts/capture-screenshot.sh so we can screenshot
-// just the app's window with `screencapture -l<id>`.
+// Prints "<windowid> <x> <y> <w> <h>" for the named on-screen window
+// (matched by owner process name). Used by scripts/capture-screenshot.sh:
+// the id for `screencapture -l<id>`, the bounds for a `-R x,y,w,h` crop
+// when window capture is refused.
 import CoreGraphics
 import Foundation
 
@@ -15,13 +16,17 @@ guard let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[S
 for window in windows {
     let name = window[kCGWindowOwnerName as String] as? String
     let layer = window[kCGWindowLayer as String] as? Int ?? 0
-    let bounds = window[kCGWindowBounds as String] as? [String: Any]
-    let width = bounds?["Width"] as? Double ?? 0
-    // layer 0 == normal windows; width > 0 skips minimised/placeholder entries
-    if name == owner, layer == 0, width > 0,
-        let id = window[kCGWindowNumber as String] as? Int {
-        print(id)
-        exit(0)
-    }
+    // layer 0 == normal windows; w/h > 0 skips minimised/placeholder entries
+    guard name == owner, layer == 0,
+        let id = window[kCGWindowNumber as String] as? Int,
+        let bounds = window[kCGWindowBounds as String] as? [String: Any],
+        let x = bounds["X"] as? Double,
+        let y = bounds["Y"] as? Double,
+        let w = bounds["Width"] as? Double,
+        let h = bounds["Height"] as? Double,
+        w > 0, h > 0
+    else { continue }
+    print("\(id) \(Int(x)) \(Int(y)) \(Int(w)) \(Int(h))")
+    exit(0)
 }
 exit(1)
