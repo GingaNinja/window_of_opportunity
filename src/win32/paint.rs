@@ -29,7 +29,7 @@ use super::{app::color_ref, font::TextGuard, stack::Rect, util::get_utf16_vec};
 /// containers stack their children (column/row, gap, padding), leaves draw.
 pub fn paint_tree(hdc: HDC, el: &Element, area: Rect) {
     let style = FlexStyle::from_props(&el.props);
-    let pad = style.padding as i32;
+    let (pt, pr, pb, pl) = style.padding;
 
     // the element's own backdrop: skip when absent — whatever is already on
     // the row (native selection, the parent's paint) shows through, like an
@@ -71,10 +71,10 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect) {
         // Window/Div: stack the children — the arrange semantics
         _ => {
             let inner = Rect {
-                x: area.x + pad,
-                y: area.y + pad,
-                w: area.w - 2 * pad,
-                h: area.h - 2 * pad,
+                x: area.x + pl as i32,
+                y: area.y + pt as i32,
+                w: area.w - (pl + pr) as i32,
+                h: area.h - (pt + pb) as i32,
             };
             if el.children.is_empty() || inner.w <= 0 || inner.h <= 0 {
                 return;
@@ -145,7 +145,7 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect) {
 /// row = max over `natural_size` for each snapshot row).
 pub fn natural_size(hdc: HDC, el: &Element) -> (i32, i32) {
     let style = FlexStyle::from_props(&el.props);
-    let pad = style.padding as i32;
+    let (pt, pr, pb, pl) = style.padding;
 
     let (mut w, mut h) = match &el.element_type {
         ElementType::Text(text) => {
@@ -173,8 +173,8 @@ pub fn natural_size(hdc: HDC, el: &Element) -> (i32, i32) {
             }
             main += gap * (el.children.len().saturating_sub(1) as i32);
             match style.direction {
-                Direction::Row => (main + 2 * pad, cross + 2 * pad),
-                Direction::Column => (cross + 2 * pad, main + 2 * pad),
+                Direction::Row => (main + (pl + pr) as i32, cross + (pt + pb) as i32),
+                Direction::Column => (cross + (pl + pr) as i32, main + (pt + pb) as i32),
             }
         }
         // TODO(painting): button/input/image placeholders

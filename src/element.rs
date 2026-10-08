@@ -66,6 +66,7 @@ pub fn button_label(el: &Element) -> String {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Prop {
     Float(f64),
+    Float4(f64, f64, f64, f64),
     Usize(usize),
     String(String),
     Bool(bool),
@@ -127,6 +128,15 @@ impl Props {
             None
         }
     }
+
+    pub fn get_float4(&self, prop: PropType) -> Option<(f64, f64, f64, f64)> {
+        if let Some(Prop::Float4(val1, val2, val3, val4)) = self.0.get(&prop) {
+            Some((*val1, *val2, *val3, *val4))
+        } else {
+            None
+        }
+    }
+
     pub fn get_bool(&self, prop: PropType) -> Option<bool> {
         if let Some(Prop::Bool(val)) = self.0.get(&prop) {
             Some(*val)
@@ -199,7 +209,11 @@ impl Props {
 /// * `gap(f64)` for space between multiple siblings (not the beginning or end)
 /// * `height(f64)`
 /// * `width(f64)`
-/// * `padding(f64)`
+/// * `padding(f64[, f64[, f64[, f64]]])` — CSS-style sides, always stored as one
+///   `Prop::Float4(top, right, bottom, left)`:
+///   `padding(8.)` -> all sides, `padding(8., 16.)` -> (vertical, horizontal),
+///   `padding(8., 16., 4.)` -> (top, horizontal, bottom),
+///   `padding(1., 2., 3., 4.)` -> (top, right, bottom, left)
 /// * `background(string)`
 ///
 #[macro_export]
@@ -390,8 +404,55 @@ macro_rules! ui {
     (@prop $el:ident, height($($val:tt)*)) => {
         ui!(@type_prop $el Height Float ($($val)*));
     };
+    // padding fills one Float4 (top, right, bottom, left) from 1–4 values,
+    // CSS-style: `padding(8.)`, `padding(v, h)`, `padding(t, h, b)`,
+    // `padding(t, r, b, l)`. Arity-specific arms MUST precede the generic
+    // fallback below (and the unknown-prop catch-all): macro_rules tries
+    // arms in order and `($($val:tt)*)` matches any arity, so only ordering
+    // keeps the 2/3/4-value forms reachable and wrong arities loud.
+    // Each form binds its values once, so a value expression is evaluated
+    // exactly once even when it fills two sides.
+    (@prop $el:ident, padding($v:expr)) => {
+        {
+            let v: f64 = ($v).into();
+            $el.props.insert(
+                $crate::element::PropType::Padding,
+                $crate::element::Prop::Float4(v, v, v, v),
+            );
+        }
+    };
+    (@prop $el:ident, padding($v:expr, $h:expr)) => {
+        {
+            let (v, h): (f64, f64) = (($v).into(), ($h).into());
+            $el.props.insert(
+                $crate::element::PropType::Padding,
+                $crate::element::Prop::Float4(v, h, v, h),
+            );
+        }
+    };
+    (@prop $el:ident, padding($top:expr, $h:expr, $bottom:expr)) => {
+        {
+            let (top, h, bottom): (f64, f64, f64) = (($top).into(), ($h).into(), ($bottom).into());
+            $el.props.insert(
+                $crate::element::PropType::Padding,
+                $crate::element::Prop::Float4(top, h, bottom, h),
+            );
+        }
+    };
+    (@prop $el:ident, padding($top:expr, $right:expr, $bottom:expr, $left:expr)) => {
+        {
+            let (top, right, bottom, left): (f64, f64, f64, f64) =
+                (($top).into(), ($right).into(), ($bottom).into(), ($left).into());
+            $el.props.insert(
+                $crate::element::PropType::Padding,
+                $crate::element::Prop::Float4(top, right, bottom, left),
+            );
+        }
+    };
+    // any other arity falls through to here — fail LOUDLY instead of
+    // emitting a confusing `.into()` error from a mangled token soup
     (@prop $el:ident, padding($($val:tt)*)) => {
-        ui!(@type_prop $el Padding Float ($($val)*));
+        compile_error!("padding takes 1, 2, 3, or 4 values in CSS order: padding(8.), padding(vertical, horizontal), padding(top, horizontal, bottom), padding(top, right, bottom, left)");
     };
     (@prop $el:ident, grow($($val:tt)*)) => {
         ui!(@type_prop $el Grow Bool ($($val)*));
@@ -577,6 +638,69 @@ mod typed_prop_tests {
         assert_eq!(
             el.props.get_bool(crate::element::PropType::Resizable),
             Some(false)
+        );
+    }
+}
+
+// (padding arity: 1/2/3/4 CSS values filling one Float4)
+#[cfg(test)]
+mod padding_arity_tests {
+    use crate::element::PropType;
+
+    #[test]
+    fn padding_fills_one_float4_css_style() {
+        // 1 value: all four sides
+        let el = crate::ui! { Div padding(8.) };
+        assert_eq!(
+            el.props.get_float4(PropType::Padding),
+            Some((8., 8., 8., 8.))
+        );
+
+        // 2 values: vertical, horizontal
+        let el = crate::ui! { Div padding(8., 16.) };
+        assert_eq!(
+            el.props.get_float4(PropType::Padding),
+            Some((8., 16., 8., 16.))
+        );
+
+        // 3 values: top, horizontal, bottom
+        let el = crate::ui! { Div padding(8., 16., 4.) };
+        assert_eq!(
+            el.props.get_float4(PropType::Padding),
+            Some((8., 16., 4., 16.))
+        );
+
+        // 4 values: top, right, bottom, left
+        let el = crate::ui! { Div padding(1., 2., 3., 4.) };
+        assert_eq!(
+            el.props.get_float4(PropType::Padding),
+            Some((1., 2., 3., 4.))
+        );
+    }
+
+    #[test]
+    fn side_repeating_forms_evaluate_each_value_once() {
+        fn bump(counter: &std::cell::Cell<u32>) -> f64 {
+            counter.set(counter.get() + 1);
+            8.
+        }
+
+        // the 2-value form reuses `v` for top AND bottom — it must not
+        // re-evaluate the caller's expression
+        let calls = std::cell::Cell::new(0u32);
+        let el = crate::ui! { Div padding(bump(&calls), 16.) };
+        assert_eq!(calls.get(), 1, "vertical value evaluated more than once");
+        assert_eq!(
+            el.props.get_float4(PropType::Padding),
+            Some((8., 16., 8., 16.))
+        );
+
+        let calls = std::cell::Cell::new(0u32);
+        let el = crate::ui! { Div padding(bump(&calls), 16., bump(&calls)) };
+        assert_eq!(calls.get(), 2, "each value evaluated exactly once");
+        assert_eq!(
+            el.props.get_float4(PropType::Padding),
+            Some((8., 16., 8., 16.))
         );
     }
 }

@@ -41,7 +41,7 @@ pub struct Rect {
 /// Arranges the tree inside `area`, positioning every leaf control.
 pub fn arrange(el: &Element, widget: &mut Widget, area: Rect) {
     let style = FlexStyle::from_props(&el.props);
-    let pad = style.padding as i32;
+    let (pt, pr, pb, pl) = style.padding;
 
     // a fixed size on the box itself wins over the area it was handed, unless it's the window (if it can be resized)
     let (x, y) = (area.x, area.y);
@@ -66,10 +66,10 @@ pub fn arrange(el: &Element, widget: &mut Widget, area: Rect) {
     // children live in the container's CLIENT space, so the inner box is
     // 0-based no matter where the container sits in its own parent
     let inner = Rect {
-        x: pad,
-        y: pad,
-        w: w - 2 * pad,
-        h: h - 2 * pad,
+        x: pl as i32,
+        y: pt as i32,
+        w: w - (pl + pr) as i32,
+        h: h - (pt + pb) as i32,
     };
     if el.children.is_empty() || inner.w <= 0 || inner.h <= 0 {
         return;
@@ -141,7 +141,7 @@ pub fn arrange(el: &Element, widget: &mut Widget, area: Rect) {
 /// props always win.
 pub fn natural(el: &Element, widget: &Widget) -> (i32, i32) {
     let style = FlexStyle::from_props(&el.props);
-    let pad = style.padding as i32;
+    let (pt, pr, pb, pl) = style.padding;
 
     let (mut w, mut h) = match (widget, &el.element_type) {
         (Widget::Button { hwnd, .. }, _) => measure_button(*hwnd, el, &button_label(el)),
@@ -165,8 +165,8 @@ pub fn natural(el: &Element, widget: &Widget) -> (i32, i32) {
             }
             main += gap * (el.children.len().saturating_sub(1) as i32);
             match style.direction {
-                Direction::Row => (main + 2 * pad, cross + 2 * pad),
-                Direction::Column => (cross + 2 * pad, main + 2 * pad),
+                Direction::Row => (main + (pl + pr) as i32, cross + (pt + pb) as i32),
+                Direction::Column => (cross + (pl + pr) as i32, main + (pt + pb) as i32),
             }
         }
         (
