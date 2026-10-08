@@ -194,23 +194,34 @@ pub fn dispatch<M: Send + Sync + 'static>(message: M) {
 
 fn register_class(hinst: HINSTANCE) {
     unsafe {
+        // the backdrop behind the root — the macOS content view's gray
+        // (rgb 151,143,143) so undecorated content blends the same way
+        // on both platforms. Leaked by design: the class owns it for
+        // the process's life.
+        let background = CreateSolidBrush(COLORREF(0x008F_8F97));
         let wc = WNDCLASSEXW {
             style: CS_HREDRAW | CS_VREDRAW,
             lpfnWndProc: Some(wndproc),
             hInstance: hinst,
             hCursor: load_cursor(None, IDC_ARROW).unwrap(),
             hIcon: load_icon(hinst, IDI_APPLICATION).unwrap_or_default(),
-            // the backdrop behind the root — the macOS content view's gray
-            // (rgb 151,143,143) so undecorated content blends the same way
-            // on both platforms. Leaked by design: the class owns it for
-            // the process's life.
-            hbrBackground: CreateSolidBrush(COLORREF(0x008F_8F97)),
+            hbrBackground: background,
             lpszClassName: CLASS_NAME,
             cbSize: mem::size_of::<WNDCLASSEXW>() as u32,
             ..Default::default()
         };
-        let atom = RegisterClassExW(&wc);
-        debug_assert!(atom != 0);
+        if RegisterClassExW(&wc) == 0 {
+            // a second Application in one process (the survey tests
+            // boot one per test) finds the class already registered —
+            // that registration is ours and fine; this call's brush is
+            // spare, so free it (the class kept the first one)
+            assert_eq!(
+                GetLastError(),
+                ERROR_CLASS_ALREADY_EXISTS,
+                "RegisterClassExW"
+            );
+            let _ = DeleteObject(background.into());
+        }
     }
 }
 
@@ -233,6 +244,7 @@ pub(crate) fn color_ref(name: &str) -> COLORREF {
         "red" => COLORREF(0x0030_3BFF),   // rgb(255, 59, 48)
         "green" => COLORREF(0x0058_D130), // rgb(48, 209, 88)
         "gray" => COLORREF(0x0093_8E8E),  // rgb(142, 142, 147)
+        "black" => COLORREF(0x0000_0000), // rgb(0,0,0)
         _ => COLORREF(0x005E_84A2),       // rgb(162, 132, 94) — SystemBrown
     }
 }
@@ -701,7 +713,11 @@ impl AppState {
             &new_el.children,
             widgets::compatible,
             |child_widget, old_child, new_child| self.patch(child_widget, old_child, new_child),
-            |child_el| self.mount_element(self.hwnd, child_el),
+            // the CONTAINER's hwnd, not the main window: a new child of a
+            // Div belongs to the div (mount_element parents it there at
+            // first mount — patch must agree or the control lands on the
+            // main window and gets positioned in the wrong space)
+            |child_el| self.mount_element(*hwnd, child_el),
         );
     }
 

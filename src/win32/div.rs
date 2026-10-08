@@ -51,7 +51,12 @@ pub fn register_div_class(hinst: HINSTANCE) {
             ..Default::default()
         };
         let atom = RegisterClassExW(&wc);
-        debug_assert!(atom != 0);
+        // a second Application in one process (the survey tests boot one
+        // per test) finds the class already registered — ours, and fine
+        assert!(
+            atom != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS,
+            "RegisterClassExW div class"
+        );
     }
 }
 
