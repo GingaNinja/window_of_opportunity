@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.4](https://github.com/GingaNinja/window_of_opportunity/compare/v0.5.3...v0.5.4) - 2026-10-08
+
+### Other
+
+- Better win32 screenshot ([#33](https://github.com/GingaNinja/window_of_opportunity/pull/33))
+
+## [0.5.3](https://github.com/GingaNinja/window_of_opportunity/compare/v0.5.2...v0.5.3) - 2026-10-08
+
+### Fixed
+
+- correct Windows screenshot positioning on DPI-scaled displays
+
+## [0.5.2](https://github.com/GingaNinja/window_of_opportunity/compare/v0.5.1...v0.5.2) - 2026-10-08
+
+### Fixed
+
+- add some automated readme info ([#30](https://github.com/GingaNinja/window_of_opportunity/pull/30))
+
 ## [0.5.1](https://github.com/GingaNinja/window_of_opportunity/compare/v0.5.0...v0.5.1) - 2026-10-08
 
 ### Fixed

@@ -162,7 +162,9 @@ pub struct AppState {
 
     /// render inputs
     root: Box<dyn Component>,
-    window: Window<WindowProxy>,
+    // Rc so AppKit calls (show, make_key_and_order_front) can clone the
+    // handle out and run without holding the AppState borrow — see below.
+    window: Rc<Window<WindowProxy>>,
     content: View,
 
     /// shared weak back-reference to the Rc wrapping this AppState — handed
@@ -1016,7 +1018,7 @@ impl<M: Send + Sync + 'static> ReactApp<M> {
             root_widget: None,
             state: State::default(),
             root,
-            window: Window::with(config, proxy),
+            window: Rc::new(Window::with(config, proxy)),
             content,
             app_weak: weak_cell.clone(),
             dispatch_event,
@@ -1053,7 +1055,12 @@ impl<M> AppDelegate for ReactApp<M> {
         self.state.borrow_mut().render();
         self.state.borrow().reload_lists();
 
-        self.state.borrow().window.show();
+        // Order front with the borrow released: AppKit can fire a resize
+        // from here (frame clamping on first show), and the resulting
+        // did_resize needs to borrow_mut AppState to re-render at the real
+        // size — holding any borrow here would make that re-entrant.
+        let window = self.state.borrow().window.clone();
+        window.show();
 
         // Kick off activation after the window is ordered front — when
         // launched from a terminal the app isn't the foreground process yet.
@@ -1069,7 +1076,10 @@ impl<M> AppDelegate for ReactApp<M> {
     /// from a terminal, slow activation...). makeKeyAndOrderFront only makes
     /// a window key while the app is active, so this is where it sticks.
     fn did_become_active(&self) {
-        self.state.borrow().window.make_key_and_order_front();
+        // Same borrow discipline as show() in did_finish_launching:
+        // make_key_and_order_front can fire a resize.
+        let window = self.state.borrow().window.clone();
+        window.make_key_and_order_front();
     }
 
     fn should_terminate_after_last_window_closed(&self) -> bool {

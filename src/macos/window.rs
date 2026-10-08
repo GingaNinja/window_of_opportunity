@@ -9,10 +9,7 @@ use cacao::{
     objc::{msg_send, sel, sel_impl},
 };
 
-use crate::{
-    app::AppState,
-    state::Handler,
-};
+use crate::{app::AppState, state::Handler};
 
 /// The window's delegate: its only job is syncing user resizes into state
 /// (window → state), so the next render requests exactly the size the user
@@ -82,9 +79,11 @@ impl WindowDelegate for WindowProxy {
         };
 
         // Run it against state — slots use interior mutability, so a shared
-        // borrow suffices.
-        {
-            let app = app.borrow();
+        // borrow suffices. try_borrow because this callback is re-entrant:
+        // AppKit can fire windowDidResize from calls made under a borrow, and
+        // an ObjC callback must never panic (they can't unwind, so a panic
+        // here aborts the process).
+        if let Ok(app) = app.try_borrow() {
             handler(&app.state, w, h);
         }
 
@@ -92,8 +91,9 @@ impl WindowDelegate for WindowProxy {
         // resizes", so the tree updates live during a drag. The size write
         // above converges (request == actual → no-op), so this can't loop.
         // Reload lists with the borrow released — item_for must find it free.
-        {
-            let mut app = app.borrow_mut();
+        // If the borrow is held up-stack, skip: that in-flight render (or the
+        // caller's follow-up one) picks up the size write above.
+        if let Ok(mut app) = app.try_borrow_mut() {
             app.render();
         }
         if let Ok(app) = app.try_borrow() {
