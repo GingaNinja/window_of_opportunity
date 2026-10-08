@@ -8,8 +8,6 @@ license = "MIT OR Apache-2.0"
 categories = ["gui"]
 repository = "https://github.com/GingaNinja/window_of_opportunity"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [target.'cfg(target_os = "macos")'.dependencies]
 cacao = "0.3.2"
 
@@ -37,6 +35,10 @@ windows = { version = "0.62.2", features = [
     "Win32_System_Ole",
     "Win32_System_Variant",
 ] }
+
+[target.'cfg(target_os = "windows")'.build-dependencies]
+embed-resource = "3.0.12"
+
 
 [features]
 debug_dump = []
