@@ -2,10 +2,11 @@
 #
 # usage: scripts/capture-screenshot.ps1 -Exe target\release\examples\simples.exe -Out dist\screenshot.png
 #
-# Captures the window rect (raised to the front first), falling back to the
-# full screen. The process is made DPI-aware up front so window rects and
-# screen copies agree on physical pixels. Run under Windows PowerShell 5.1
-# (System.Windows.Forms is .NET Framework there, no quirks).
+# Fits the window inside the work area, raises it, and captures its visible
+# frame (falling back to the full screen). The process is made DPI-aware up
+# front so window rects and screen copies agree on physical pixels. Run
+# under Windows PowerShell 5.1 (System.Windows.Forms is .NET Framework
+# there, no quirks).
 
 param(
     [Parameter(Mandatory = $true)][string]$Exe,
@@ -15,8 +16,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Bitmap.Save throws a cryptic "generic error occurred in GDI+" when the
+# output directory doesn't exist.
+$outDir = Split-Path -Parent $Out
+if ($outDir) { [void][System.IO.Directory]::CreateDirectory($outDir) }
+
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+if ("Win32Shot" -as [type]) {} else {
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -54,8 +61,15 @@ public static class Win32Shot {
 
     [DllImport("user32.dll")]
     public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out RECT rect, int size);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetWindowPos(IntPtr hWnd, IntPtr insertAfter, int x, int y, int cx, int cy, uint flags);
 }
 "@
+}
 
 # Make every coordinate in this script physical pixels. Without this, a
 # DPI-scaled desktop (125%/150%) virtualises coordinates for the unaware
@@ -82,6 +96,19 @@ function Test-UniformImage([System.Drawing.Bitmap]$bmp) {
     return $true
 }
 
+# The window's VISIBLE frame. GetWindowRect includes the invisible resize
+# borders - those pixels show whatever is behind the window (the strips in
+# earlier captures), while DWM's extended frame bounds is exact at any DPI,
+# so no fixed edge trimming is needed. Falls back to GetWindowRect where DWM
+# is unavailable.
+function Get-VisibleRect([IntPtr]$handle) {
+    $rect = New-Object Win32Shot+RECT
+    if ([Win32Shot]::DwmGetWindowAttribute($handle, 9, [ref]$rect, 16) -ne 0) { # DWMWA_EXTENDED_FRAME_BOUNDS
+        [void][Win32Shot]::GetWindowRect($handle, [ref]$rect)
+    }
+    return $rect
+}
+
 $proc = Start-Process -FilePath $Exe -PassThru
 try {
     # Give the app time to create and lay out its window.
@@ -99,6 +126,24 @@ try {
     $rect = New-Object Win32Shot+RECT
     $handle = $proc.MainWindowHandle
     if ($handle -ne [IntPtr]::Zero -and [Win32Shot]::GetWindowRect($handle, [ref]$rect)) {
+        # Fit the window inside the work area first: on small displays (the
+        # CI runner is 1024x768) the window overlaps the taskbar and the
+        # capture would include it. The example is resizable and re-lays
+        # itself out via on_resize.
+        $work = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+        $margin = 8
+        [void][Win32Shot]::GetWindowRect($handle, [ref]$rect)
+        $curW = $rect.Right - $rect.Left
+        $curH = $rect.Bottom - $rect.Top
+        $fitW = [Math]::Min($curW, $work.Width - 2 * $margin)
+        $fitH = [Math]::Min($curH, $work.Height - 2 * $margin)
+        if ($fitW -ne $curW -or $fitH -ne $curH) {
+            Write-Host "Window ${curW}x${curH} doesn't fit the work area; resizing to ${fitW}x${fitH}"
+        }
+        [void][Win32Shot]::SetWindowPos($handle, [IntPtr]::Zero, # SWP_NOZORDER | SWP_NOACTIVATE
+            $work.X + $margin, $work.Y + $margin, $fitW, $fitH, 0x14)
+        Start-Sleep -Milliseconds 500 # let the app re-render at the new size
+
         # Raise it so nothing overlaps the capture. SetForegroundWindow alone
         # is subject to the foreground lock when the caller isn't the
         # foreground process (it silently fails), so borrow the foreground
@@ -114,7 +159,7 @@ try {
             [void][Win32Shot]::AttachThreadInput($ourThread, $fgThread, $false)
         }
         Start-Sleep -Milliseconds 500
-        [void][Win32Shot]::GetWindowRect($handle, [ref]$rect)
+        $rect = Get-VisibleRect $handle
         $origin = [System.Drawing.Point]::new($rect.Left, $rect.Top)
         $size = [System.Drawing.Size]::new($rect.Right - $rect.Left, $rect.Bottom - $rect.Top)
         Write-Host "Capturing window rect $($rect.Left),$($rect.Top) $($size.Width)x$($size.Height)"
