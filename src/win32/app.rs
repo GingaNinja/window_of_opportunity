@@ -860,6 +860,23 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
                 return LRESULT(0);
             }
+            WM_DPICHANGED => {
+                if let Ok(mut app) = app.try_borrow_mut() {
+                    let dpi = {
+                        let dpi_context =
+                            GetAwarenessFromDpiAwarenessContext(GetThreadDpiAwarenessContext());
+
+                        match dpi_context {
+                            DPI_AWARENESS_SYSTEM_AWARE => GetDpiForSystem(),
+                            DPI_AWARENESS_PER_MONITOR_AWARE => GetDpiForWindow(hwnd),
+                            _ => 96,
+                        }
+                    };
+                    app.dpi = dpi;
+                    println!("dpi changed to {dpi}");
+                    app.render();
+                }
+            }
             WM_SIZE => {
                 // the WindowProxy.did_resize role: user resizes flow through
                 // component logic (on_resize), then the tree follows. lparam
