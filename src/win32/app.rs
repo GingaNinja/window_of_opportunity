@@ -24,14 +24,17 @@ use std::{
 use windows::{
     Win32::{
         Foundation::*,
-        Graphics::Gdi::{
-            CreateSolidBrush, DeleteObject, GetDC, HBRUSH, HFONT, InvalidateRect, ReleaseDC,
-        },
+        Graphics::Gdi::{CreateSolidBrush, DeleteObject, HBRUSH, HFONT, InvalidateRect},
         System::LibraryLoader::GetModuleHandleW,
         UI::{
             Controls::{
                 EM_SETCUEBANNER, ICC_LISTVIEW_CLASSES, INITCOMMONCONTROLSEX, ImageList_Destroy,
                 InitCommonControlsEx, LVM_SETITEMCOUNT,
+            },
+            HiDpi::{
+                DPI_AWARENESS_PER_MONITOR_AWARE, DPI_AWARENESS_SYSTEM_AWARE,
+                GetAwarenessFromDpiAwarenessContext, GetDpiForSystem, GetDpiForWindow,
+                GetThreadDpiAwarenessContext,
             },
             WindowsAndMessaging::*,
         },
@@ -135,6 +138,7 @@ impl Application {
                 on_app_message,
                 last_requested_size: Cell::new(None),
                 fonts: RefCell::new(HashMap::new()),
+                dpi: 96,
             }));
 
             // hand the Rc to the window via lpParam — WM_NCCREATE parks it
@@ -158,6 +162,19 @@ impl Application {
             .expect("CreateWindowExW");
             state.borrow_mut().hwnd = hwnd;
             MAIN_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+
+            let dpi = {
+                let dpi_context =
+                    GetAwarenessFromDpiAwarenessContext(GetThreadDpiAwarenessContext());
+
+                match dpi_context {
+                    DPI_AWARENESS_SYSTEM_AWARE => GetDpiForSystem(),
+                    DPI_AWARENESS_PER_MONITOR_AWARE => GetDpiForWindow(hwnd),
+                    _ => 96,
+                }
+            };
+
+            state.borrow_mut().dpi = dpi;
 
             // first render + show — the win32 `did_finish_launching`
             state.borrow_mut().render();
@@ -289,6 +306,7 @@ pub(crate) struct AppState {
     /// app requests thousands of distinct heights in one session — then
     /// evict keys the current tree's font_size props don't reference.
     fonts: RefCell<HashMap<i32, HFONT>>,
+    pub dpi: u32,
 }
 
 /// WM_SETFONT fonts must outlive the controls that wear them, so this
@@ -317,12 +335,25 @@ impl AppState {
         println!("{tree:#?}");
 
         let spec = window_spec(&tree);
+
+        let scaled_width = if let Some(width) = spec.width {
+            Some((width * self.dpi as f64 / 96 as f64).round())
+            //println!("new spec width: {}", spec.width.unwrap());
+        } else {
+            None
+        };
+        let scaled_height = if let Some(height) = spec.height {
+            Some((height * self.dpi as f64 / 96 as f64).round())
+        } else {
+            None
+        };
+
         self.handlers
             .set_resize_handler(tree.handlers.get("on_resize").cloned());
 
         match (self.last_tree.take(), self.root_widget.take()) {
             (Some(old_tree), Some(mut root_widget)) => {
-                self.patch(&mut root_widget, &old_tree, &tree);
+                self.patch(&mut root_widget, &old_tree, &tree, self.dpi);
                 self.root_widget = Some(root_widget);
             }
             (_, root_widget) => {
@@ -343,11 +374,12 @@ impl AppState {
         // size when the REQUEST changes — a user resize in between is the
         // user's business.
         let (natural_w, natural_h) = match self.root_widget.as_ref() {
-            Some(widget) => stack::natural(&tree, widget),
+            Some(widget) => stack::natural(&tree, widget, self.dpi),
             None => (1, 1),
         };
-        let client_w = spec.width.map(|w| w as i32).unwrap_or(natural_w);
-        let client_h = spec.height.map(|h| h as i32).unwrap_or(natural_h);
+        let client_w = scaled_width.map(|w| w as i32).unwrap_or(natural_w);
+        let client_h = scaled_height.map(|h| h as i32).unwrap_or(natural_h);
+
         if self.last_requested_size.replace(Some((client_w, client_h)))
             != Some((client_w, client_h))
         {
@@ -387,6 +419,7 @@ impl AppState {
                     w: rect.right - rect.left,
                     h: rect.bottom - rect.top,
                 },
+                self.dpi,
             );
         }
 
@@ -434,7 +467,7 @@ impl AppState {
                 // SS_NOTIFY lets accessibility tools (and the mouse)
                 // interact with the label; SS_LEFT is the default (0).
                 let hwnd = self.create_control(w!("static"), text, 0x0100, parent); // SS_NOTIFY-0x0100
-                self.apply_font(hwnd, el);
+                self.apply_font(hwnd, el, self.dpi);
                 Widget::Label { hwnd }
             }
             ElementType::Button => {
@@ -448,7 +481,7 @@ impl AppState {
                     BS_PUSHBUTTON as u32 | WS_TABSTOP.0,
                     parent,
                 );
-                self.apply_font(hwnd, el);
+                self.apply_font(hwnd, el, self.dpi);
                 Widget::Button {
                     hwnd,
                     on_click: match el.handlers.get("on_click") {
@@ -463,7 +496,7 @@ impl AppState {
                 // widget (the text comes from the control at fire time); the
                 // id registry is for payload-free dispatch.
                 let hwnd = self.create_control(w!("EDIT"), "", WS_BORDER.0 | WS_TABSTOP.0, parent);
-                self.apply_font(hwnd, el);
+                self.apply_font(hwnd, el, self.dpi);
                 if let Some(value) = el.props.get_string(PropType::Value) {
                     set_window_text(hwnd, value);
                 }
@@ -481,7 +514,9 @@ impl AppState {
                 let rows = reconcile::snapshot_rows(&self.state, el);
                 let row_height = {
                     let dc = DeviceContext::from(parent);
-                    rows.iter().map(|r| paint::natural_size(dc.hdc, r).1).max()
+                    rows.iter()
+                        .map(|r| paint::natural_size(dc.hdc, r, self.dpi).1)
+                        .max()
                 }
                 .unwrap_or(20);
                 let list_hwnd = create_list(parent, rows.len());
@@ -537,16 +572,9 @@ impl AppState {
     /// font.rs), so what's measured is what's drawn. Handles come from a
     /// size-keyed cache (equal sizes share one HFONT); without the prop
     /// nothing is sent and the control keeps its default font.
-    fn apply_font(&self, hwnd: HWND, el: &Element) {
-        let Some(points) = el.props.get_float(PropType::FontSize) else {
-            return; // no font_size: the control keeps its default font
-        };
-        let pixels = unsafe {
-            let hdc = GetDC(Some(hwnd));
-            let pixels = scaled_pixels(points, hdc);
-            let _ = ReleaseDC(Some(hwnd), hdc);
-            pixels
-        };
+    fn apply_font(&self, hwnd: HWND, el: &Element, dpi: u32) {
+        let points = el.props.get_float(PropType::FontSize).unwrap_or(10.);
+        let pixels = scaled_pixels(points, dpi);
         let font = *self
             .fonts
             .borrow_mut()
@@ -567,23 +595,23 @@ impl AppState {
     /// size is a cache hit. Removing the prop keeps the last font in place
     /// (the control's original default is gone after our first WM_SETFONT)
     /// — TODO(font): flip back to the stock GUI font then.
-    fn refresh_font(&self, old_el: &Element, new_el: &Element, hwnd: HWND) {
+    fn refresh_font(&self, old_el: &Element, new_el: &Element, hwnd: HWND, dpi: u32) {
         if old_el.props.get_float(PropType::FontSize) != new_el.props.get_float(PropType::FontSize)
             && new_el.props.get_float(PropType::FontSize).is_some()
         {
-            self.apply_font(hwnd, new_el);
+            self.apply_font(hwnd, new_el, dpi);
         }
     }
 
     /// Reconciliation, same shape as the macOS `patch`: reuse widgets whose
     /// elements line up, refresh props and handlers in place.
-    fn patch(&self, widget: &mut Widget, old_el: &Element, new_el: &Element) {
+    fn patch(&self, widget: &mut Widget, old_el: &Element, new_el: &Element, dpi: u32) {
         match (widget, &new_el.element_type) {
             (widget @ Widget::Container { .. }, ElementType::Window | ElementType::Div) => {
-                self.patch_container(widget, old_el, new_el);
+                self.patch_container(widget, old_el, new_el, dpi);
             }
             (Widget::Button { hwnd, on_click }, ElementType::Button) => {
-                self.refresh_font(old_el, new_el, *hwnd);
+                self.refresh_font(old_el, new_el, *hwnd, dpi);
                 // reconcile the title
                 if button_label(old_el) != button_label(new_el) {
                     let title = get_utf16_vec(&button_label(new_el));
@@ -599,7 +627,7 @@ impl AppState {
                 };
             }
             (Widget::Label { hwnd }, ElementType::Text(text)) => {
-                self.refresh_font(old_el, new_el, *hwnd);
+                self.refresh_font(old_el, new_el, *hwnd, dpi);
                 // display-only: no cursor to protect, just refresh
                 let title = get_utf16_vec(text);
                 unsafe {
@@ -607,7 +635,7 @@ impl AppState {
                 }
             }
             (Widget::Input { hwnd, on_change }, ElementType::Input) => {
-                self.refresh_font(old_el, new_el, *hwnd);
+                self.refresh_font(old_el, new_el, *hwnd, dpi);
                 // controlled value: write only what actually differs — the
                 // caret must never move under the user (same contract as the
                 // cacao side)
@@ -643,7 +671,9 @@ impl AppState {
                 *rows = reconcile::snapshot_rows(&self.state, new_el);
                 let measured = {
                     let dc = DeviceContext::from(*hwnd);
-                    rows.iter().map(|r| paint::natural_size(dc.hdc, r).1).max()
+                    rows.iter()
+                        .map(|r| paint::natural_size(dc.hdc, r, self.dpi).1)
+                        .max()
                 }
                 .unwrap_or(20);
                 if measured != *row_height {
@@ -667,7 +697,7 @@ impl AppState {
         }
     }
 
-    fn patch_container(&self, widget: &mut Widget, old_el: &Element, new_el: &Element) {
+    fn patch_container(&self, widget: &mut Widget, old_el: &Element, new_el: &Element, dpi: u32) {
         let Widget::Container {
             hwnd,
             background,
@@ -712,7 +742,9 @@ impl AppState {
             &old_el.children,
             &new_el.children,
             widgets::compatible,
-            |child_widget, old_child, new_child| self.patch(child_widget, old_child, new_child),
+            |child_widget, old_child, new_child| {
+                self.patch(child_widget, old_child, new_child, dpi)
+            },
             // the CONTAINER's hwnd, not the main window: a new child of a
             // Div belongs to the div (mount_element parents it there at
             // first mount — patch must agree or the control lands on the
@@ -837,6 +869,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         (lparam.0 & 0xffff) as f64,
                         ((lparam.0 >> 16) & 0xffff) as f64,
                     );
+
+                    let w = w * 96 as f64 / app.dpi as f64;
+                    let h = h * 96 as f64 / app.dpi as f64;
+
                     if let Some(Handler::Resize(f)) = app.handlers.resize_handler() {
                         f(&app.state, w, h);
                     }

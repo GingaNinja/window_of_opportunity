@@ -23,12 +23,17 @@ use crate::{
     layout::{Direction, FlexStyle},
 };
 
-use super::{app::color_ref, font::TextGuard, stack::Rect, util::get_utf16_vec};
+use super::{
+    app::color_ref,
+    font::TextGuard,
+    stack::Rect,
+    util::{get_utf16_vec, scale_style_props},
+};
 
 /// Paints an element tree into `area`. The walk mirrors stack::arrange:
 /// containers stack their children (column/row, gap, padding), leaves draw.
-pub fn paint_tree(hdc: HDC, el: &Element, area: Rect) {
-    let style = FlexStyle::from_props(&el.props);
+pub fn paint_tree(hdc: HDC, el: &Element, area: Rect, dpi: u32) {
+    let style = scale_style_props(&el.props, dpi);
     let (pt, pr, pb, pl) = style.padding;
 
     // the element's own backdrop: skip when absent — whatever is already on
@@ -47,6 +52,7 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect) {
                 hdc,
                 el.props.get_float(PropType::FontSize),
                 el.props.get_string(PropType::Color).map(color_ref),
+                dpi,
             );
             let mut wide = get_utf16_vec(text);
             let mut rect = to_rect(area);
@@ -86,7 +92,7 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect) {
             let naturals: Vec<(i32, i32)> = el
                 .children
                 .iter()
-                .map(|child| natural_size(hdc, child))
+                .map(|child| natural_size(hdc, child, dpi))
                 .collect();
             let total_main: i32 = naturals
                 .iter()
@@ -107,7 +113,7 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect) {
 
             let mut cursor = if main_is_row { inner.x } else { inner.y };
             for (index, child) in el.children.iter().enumerate() {
-                let c_style = FlexStyle::from_props(&child.props);
+                let c_style = scale_style_props(&child.props, dpi);
                 let (nw, nh) = naturals[index];
                 let mut main = if main_is_row { nw } else { nh };
                 if Some(index) == last_grow {
@@ -133,6 +139,7 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect) {
                         w: bw,
                         h: bh,
                     },
+                    dpi,
                 );
                 cursor += (if main_is_row { bw } else { bh }) + gap;
             }
@@ -143,15 +150,15 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect) {
 /// The natural (hugging) size of an element, measured from the DC — rows
 /// have no widgets. Also the seam the row-height work wants (the tallest
 /// row = max over `natural_size` for each snapshot row).
-pub fn natural_size(hdc: HDC, el: &Element) -> (i32, i32) {
-    let style = FlexStyle::from_props(&el.props);
+pub fn natural_size(hdc: HDC, el: &Element, dpi: u32) -> (i32, i32) {
+    let style = scale_style_props(&el.props, dpi);
     let (pt, pr, pb, pl) = style.padding;
 
     let (mut w, mut h) = match &el.element_type {
         ElementType::Text(text) => {
             // measure under the same font painting will use — the row
             // heights derived from this depend on it
-            let _text = TextGuard::apply(hdc, el.props.get_float(PropType::FontSize), None);
+            let _text = TextGuard::apply(hdc, el.props.get_float(PropType::FontSize), None, dpi);
             let (tw, th) = text_extent(hdc, text);
             (tw + 8, th + 4) // label breathing room
         }
@@ -159,7 +166,7 @@ pub fn natural_size(hdc: HDC, el: &Element) -> (i32, i32) {
             let gap = style.gap as i32;
             let (mut main, mut cross) = (0, 0);
             for child in el.children.iter() {
-                let (cw, ch) = natural_size(hdc, child);
+                let (cw, ch) = natural_size(hdc, child, dpi);
                 match style.direction {
                     Direction::Row => {
                         main += cw;
