@@ -14,15 +14,15 @@
 
 use windows::Win32::Foundation::COLORREF;
 use windows::Win32::Graphics::Gdi::{
-    BACKGROUND_MODE, CreateFontIndirectW, DEFAULT_GUI_FONT, DeleteObject, GetDeviceCaps,
-    GetObjectW, GetStockObject, HDC, HFONT, HGDIOBJ, LOGFONTW, LOGPIXELSY, SelectObject, SetBkMode,
-    SetTextColor, TRANSPARENT,
+    BACKGROUND_MODE, CreateFontIndirectW, DEFAULT_GUI_FONT, DeleteObject, GetObjectW,
+    GetStockObject, HDC, HFONT, HGDIOBJ, LOGFONTW, SelectObject, SetBkMode, SetTextColor,
+    TRANSPARENT,
 };
 
 /// font_size in points → the font's pixel height at the DC's DPI (96 DPI
 /// ⇒ 1pt = 1.33px).
-pub(super) fn scaled_pixels(points: f64, hdc: HDC) -> i32 {
-    unsafe { ((points * GetDeviceCaps(Some(hdc), LOGPIXELSY) as f64 / 72.0).round()) as i32 }
+pub(super) fn scaled_pixels(points: f64, dpi: u32) -> i32 {
+    (points * dpi as f64 / 72.) as i32
 }
 
 /// The stock GUI font's face and weight, at the requested pixel height —
@@ -59,15 +59,18 @@ pub(super) struct TextGuard {
 }
 
 impl TextGuard {
-    pub(super) fn apply(hdc: HDC, font_size: Option<f64>, color: Option<COLORREF>) -> Self {
+    pub(super) fn apply(
+        hdc: HDC,
+        font_size: Option<f64>,
+        color: Option<COLORREF>,
+        dpi: u32,
+    ) -> Self {
         let prev_color = color.map(|color| unsafe { SetTextColor(hdc, color) });
         let prev_bk = unsafe { SetBkMode(hdc, TRANSPARENT) };
-        let (font, prev_font) = match font_size {
-            Some(points) => {
-                let font = create_font(scaled_pixels(points, hdc));
-                (Some(font), Some(unsafe { SelectObject(hdc, font.into()) }))
-            }
-            None => (None, None),
+        let font_size = font_size.unwrap_or(10.);
+        let (font, prev_font) = {
+            let font = create_font(scaled_pixels(font_size, dpi));
+            (Some(font), Some(unsafe { SelectObject(hdc, font.into()) }))
         };
         Self {
             hdc,
