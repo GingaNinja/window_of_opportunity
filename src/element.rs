@@ -67,9 +67,52 @@ pub fn button_label(el: &Element) -> String {
 pub enum Prop {
     Float(f64),
     Float4(f64, f64, f64, f64),
+    Length(Length),
     Usize(usize),
     String(String),
     Bool(bool),
+}
+
+/// A length with an explicit unit — `font_size` is the only user so far.
+/// Written in the macro as `pt 12.` / `em 1.5` / `px 16.` (or a bare
+/// number = points); resolved ONCE in the platform's fixup pass (win32's
+/// `fixup_dpi` → pixels, the macOS side → points), after which everything
+/// downstream works in resolved units and never converts again.
+///
+/// (Unit-first syntax because `1.5em` cannot even lex in Rust: the `e`
+/// after a float is swallowed as an exponent sign.)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Length {
+    /// Points: 1/72 inch — DPI-independent, like macOS's `Font::system`.
+    Pt(f64),
+    /// Relative to the platform's default font size ("em") — tracks the
+    /// OS font-scaling settings (Windows' message font height, macOS's
+    /// system font size).
+    Em(f64),
+    /// Pixel height.
+    Px(f64),
+}
+
+impl Length {
+    /// Resolve to device pixels. pt scales with the dpi, em is relative to
+    /// the default font's PIXEL height, px is already there.
+    pub fn to_pixels(self, dpi: u32, default_font_px: f64) -> f64 {
+        match self {
+            Length::Pt(v) => v * dpi as f64 / 72.0,
+            Length::Em(v) => v * default_font_px,
+            Length::Px(v) => v,
+        }
+    }
+
+    /// Resolve to points (the macOS side's unit). em is relative to the
+    /// default font's POINT size, px converts at 96 dpi.
+    pub fn to_points(self, default_font_pt: f64) -> f64 {
+        match self {
+            Length::Pt(v) => v,
+            Length::Em(v) => v * default_font_pt,
+            Length::Px(v) => v * 72.0 / 96.0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
@@ -116,6 +159,13 @@ impl Props {
     }
     pub fn get_usize(&self, prop: PropType) -> Option<usize> {
         if let Some(Prop::Usize(val)) = self.0.get(&prop) {
+            Some(*val)
+        } else {
+            None
+        }
+    }
+    pub fn get_length(&self, prop: PropType) -> Option<Length> {
+        if let Some(Prop::Length(val)) = self.0.get(&prop) {
             Some(*val)
         } else {
             None
@@ -466,8 +516,48 @@ macro_rules! ui {
     (@prop $el:ident, gap($($val:tt)*)) => {
         ui!(@type_prop $el Gap Float ($($val)*));
     };
+    // font_size carries a unit: `pt 12.` (points), `em 1.5` (relative to
+    // the platform's default font), `px 16.` (pixel height), or a bare
+    // number = points. Unit-first because `1.5em` can't even LEX (the `e`
+    // is swallowed as a float exponent). The unit-bearing arms MUST
+    // precede the bare fallback — macro_rules tries arms in order and
+    // `($($val:tt)*)` matches `pt 12.` too.
+    (@prop $el:ident, font_size(pt $($val:tt)*)) => {
+        {
+            let v: f64 = ($($val)*).into();
+            $el.props.insert(
+                $crate::element::PropType::FontSize,
+                $crate::element::Prop::Length($crate::element::Length::Pt(v)),
+            );
+        }
+    };
+    (@prop $el:ident, font_size(em $($val:tt)*)) => {
+        {
+            let v: f64 = ($($val)*).into();
+            $el.props.insert(
+                $crate::element::PropType::FontSize,
+                $crate::element::Prop::Length($crate::element::Length::Em(v)),
+            );
+        }
+    };
+    (@prop $el:ident, font_size(px $($val:tt)*)) => {
+        {
+            let v: f64 = ($($val)*).into();
+            $el.props.insert(
+                $crate::element::PropType::FontSize,
+                $crate::element::Prop::Length($crate::element::Length::Px(v)),
+            );
+        }
+    };
+    // a bare number keeps its historical meaning: points
     (@prop $el:ident, font_size($($val:tt)*)) => {
-        ui!(@type_prop $el FontSize Float ($($val)*));
+        {
+            let v: f64 = ($($val)*).into();
+            $el.props.insert(
+                $crate::element::PropType::FontSize,
+                $crate::element::Prop::Length($crate::element::Length::Pt(v)),
+            );
+        }
     };
     (@prop $el:ident, direction($($val:tt)*)) => {
         ui!(@type_prop $el Direction String ($($val)*));
@@ -768,5 +858,46 @@ mod component_prop_tests {
         // props + children both
         let el = crate::ui! { Fancy count(7) { { crate::ui! { Text "child" } } } };
         assert_eq!(el.children.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod length_tests {
+    use super::*;
+
+    #[test]
+    fn length_resolves_to_pixels() {
+        // pt scales with dpi: 12pt is 16px at 96dpi, 24px at 144dpi
+        assert_eq!(Length::Pt(12.).to_pixels(96, 13.), 16.);
+        assert_eq!(Length::Pt(12.).to_pixels(144, 13.), 24.);
+        // em is relative to the default font's pixel height
+        assert_eq!(Length::Em(1.5).to_pixels(96, 13.), 19.5);
+        // px is already pixels, whatever the dpi
+        assert_eq!(Length::Px(16.).to_pixels(144, 13.), 16.);
+    }
+
+    #[test]
+    fn length_resolves_to_points() {
+        assert_eq!(Length::Pt(12.).to_points(13.), 12.);
+        assert_eq!(Length::Em(1.5).to_points(13.), 19.5);
+        assert_eq!(Length::Px(16.).to_points(13.), 12.);
+    }
+
+    #[test]
+    fn macro_font_size_units() {
+        let el = ui! { Text font_size(pt 12.) { "x".to_string() } };
+        assert_eq!(el.props.get_length(PropType::FontSize), Some(Length::Pt(12.)));
+
+        let el = ui! { Text font_size(em 1.5) { "x".to_string() } };
+        assert_eq!(el.props.get_length(PropType::FontSize), Some(Length::Em(1.5)));
+
+        let el = ui! { Text font_size(px 16.) { "x".to_string() } };
+        assert_eq!(el.props.get_length(PropType::FontSize), Some(Length::Px(16.)));
+    }
+
+    #[test]
+    fn macro_bare_font_size_is_points() {
+        let el = ui! { Text font_size(18.) { "x".to_string() } };
+        assert_eq!(el.props.get_length(PropType::FontSize), Some(Length::Pt(18.)));
     }
 }

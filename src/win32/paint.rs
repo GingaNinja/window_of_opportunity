@@ -15,7 +15,7 @@
 use windows::Win32::Foundation::{RECT, SIZE};
 use windows::Win32::Graphics::Gdi::{
     CreateSolidBrush, DT_END_ELLIPSIS, DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawTextW,
-    FillRect, GetTextExtentPoint32W, HBRUSH, HDC,
+    FillRect, GetTextExtentPoint32W, HBRUSH, HDC, LOGFONTW,
 };
 
 use crate::{
@@ -25,15 +25,15 @@ use crate::{
 
 use super::{
     app::color_ref,
-    font::TextGuard,
+    font::{font_pixels, TextGuard},
     stack::Rect,
-    util::{get_utf16_vec, scale_style_props},
+    util::{calc_scaled, get_utf16_vec},
 };
 
 /// Paints an element tree into `area`. The walk mirrors stack::arrange:
 /// containers stack their children (column/row, gap, padding), leaves draw.
-pub fn paint_tree(hdc: HDC, el: &Element, area: Rect, dpi: u32) {
-    let style = scale_style_props(&el.props, dpi);
+pub fn paint_tree(hdc: HDC, el: &Element, area: Rect, dpi: u32, font: LOGFONTW) {
+    let style = FlexStyle::from_props(&el.props);
     let (pt, pr, pb, pl) = style.padding;
 
     // the element's own backdrop: skip when absent — whatever is already on
@@ -50,9 +50,9 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect, dpi: u32) {
             // row, every draw callback) inherits nothing
             let _text = TextGuard::apply(
                 hdc,
-                el.props.get_float(PropType::FontSize),
+                font_pixels(&el.props, font),
                 el.props.get_string(PropType::Color).map(color_ref),
-                dpi,
+                font,
             );
             let mut wide = get_utf16_vec(text);
             let mut rect = to_rect(area);
@@ -92,7 +92,7 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect, dpi: u32) {
             let naturals: Vec<(i32, i32)> = el
                 .children
                 .iter()
-                .map(|child| natural_size(hdc, child, dpi))
+                .map(|child| natural_size(hdc, child, dpi, font))
                 .collect();
             let total_main: i32 = naturals
                 .iter()
@@ -113,7 +113,7 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect, dpi: u32) {
 
             let mut cursor = if main_is_row { inner.x } else { inner.y };
             for (index, child) in el.children.iter().enumerate() {
-                let c_style = scale_style_props(&child.props, dpi);
+                let c_style = FlexStyle::from_props(&child.props);
                 let (nw, nh) = naturals[index];
                 let mut main = if main_is_row { nw } else { nh };
                 if Some(index) == last_grow {
@@ -140,6 +140,7 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect, dpi: u32) {
                         h: bh,
                     },
                     dpi,
+                    font,
                 );
                 cursor += (if main_is_row { bw } else { bh }) + gap;
             }
@@ -150,23 +151,27 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect, dpi: u32) {
 /// The natural (hugging) size of an element, measured from the DC — rows
 /// have no widgets. Also the seam the row-height work wants (the tallest
 /// row = max over `natural_size` for each snapshot row).
-pub fn natural_size(hdc: HDC, el: &Element, dpi: u32) -> (i32, i32) {
-    let style = scale_style_props(&el.props, dpi);
+pub fn natural_size(hdc: HDC, el: &Element, dpi: u32, font: LOGFONTW) -> (i32, i32) {
+    let style = FlexStyle::from_props(&el.props);
     let (pt, pr, pb, pl) = style.padding;
 
     let (mut w, mut h) = match &el.element_type {
         ElementType::Text(text) => {
             // measure under the same font painting will use — the row
             // heights derived from this depend on it
-            let _text = TextGuard::apply(hdc, el.props.get_float(PropType::FontSize), None, dpi);
+            let _text = TextGuard::apply(hdc, font_pixels(&el.props, font), None, font);
             let (tw, th) = text_extent(hdc, text);
-            (tw + 8, th + 4) // label breathing room
+            // label breathing room, scaled like any other chrome constant
+            (
+                tw + calc_scaled(8., dpi) as i32,
+                th + calc_scaled(4., dpi) as i32,
+            )
         }
         _ if !el.children.is_empty() => {
             let gap = style.gap as i32;
             let (mut main, mut cross) = (0, 0);
             for child in el.children.iter() {
-                let (cw, ch) = natural_size(hdc, child, dpi);
+                let (cw, ch) = natural_size(hdc, child, dpi, font);
                 match style.direction {
                     Direction::Row => {
                         main += cw;

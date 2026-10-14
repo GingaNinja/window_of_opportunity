@@ -199,14 +199,14 @@ pub fn notify(app: &RefCell<AppState>, lparam: LPARAM) -> LRESULT {
                             h: rect.bottom - rect.top,
                         };
                         if let Ok(mut app) = app.try_borrow_mut() {
-                            let dpi = app.dpi;
+                            let (dpi, font) = (app.dpi, app.default_font);
                             if let Some(element) = app
                                 .root_widget
                                 .as_mut()
                                 .and_then(|root| find_list_rows(root, hdr.hwndFrom))
                                 .and_then(|rows| rows.get(row))
                             {
-                                paint::paint_tree(draw.hdc, element, area, dpi);
+                                paint::paint_tree(draw.hdc, element, area, dpi, font);
                             }
                         } else {
                             // A render is in flight (it borrows the app), and

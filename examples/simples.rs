@@ -52,7 +52,7 @@ impl Component for Pane {
                         let items = if first { ["one", "two"] } else { ["ein", "zwei"] };
                         let color = if row == 0 { "blue" } else { "green" };
                         ui! {
-                            Div height(24.) padding(4.) background(color) {
+                            Div padding(4.) background(color) {
                                 { Text format!("row {row}: {}", items[row]) }
                             }
                         }

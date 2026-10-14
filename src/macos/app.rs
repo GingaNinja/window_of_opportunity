@@ -509,8 +509,10 @@ impl AppState {
                 if let Some(txt_color) = el.props.get_string(PropType::Color) {
                     label.set_text_color(color(txt_color));
                 }
-                if let Some(font_size) = el.props.get_float(PropType::FontSize) {
-                    let font = Font::system(font_size);
+                // font_size is a Length here (pt/em/px) — resolve to points.
+                // 13. is macOS's system font size, so `em` tracks it.
+                if let Some(len) = el.props.get_length(PropType::FontSize) {
+                    let font = Font::system(len.to_points(13.));
                     label.set_font(font);
                 }
 
@@ -849,11 +851,11 @@ impl AppState {
                 {
                     label.set_text_color(color(txt_color));
                 }
-                if old_el.props.get_float(PropType::FontSize)
-                    != new_el.props.get_float(PropType::FontSize)
-                    && let Some(font_size) = new_el.props.get_float(PropType::FontSize)
+                if old_el.props.get_length(PropType::FontSize)
+                    != new_el.props.get_length(PropType::FontSize)
+                    && let Some(len) = new_el.props.get_length(PropType::FontSize)
                 {
-                    label.set_font(Font::system(font_size));
+                    label.set_font(Font::system(len.to_points(13.)));
                 }
             }
 
