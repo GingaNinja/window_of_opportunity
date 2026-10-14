@@ -130,8 +130,8 @@ impl DeviceContext {
     /// scoped inside this call (a TextGuard), so the restore always lands
     /// before the DC is released, whatever the caller does with its own
     /// drop order. `None` measures with the DC's current font.
-    pub fn text_metrics(&self, font_size: Option<f64>, dpi: u32) -> TEXTMETRICW {
-        let _text = TextGuard::apply(self.hdc, font_size, None, dpi);
+    pub fn text_metrics(&self, font_size: i32, default_font: LOGFONTW) -> TEXTMETRICW {
+        let _text = TextGuard::apply(self.hdc, font_size, None, default_font);
         let mut tm = TEXTMETRICW::default();
         unsafe {
             let _ = GetTextMetricsW(self.hdc, &mut tm);
@@ -141,8 +141,8 @@ impl DeviceContext {
 
     /// Text extent under the given font_size (POINTS), same scoping as
     /// `text_metrics`. `None` measures with the DC's current font.
-    pub fn text_extent(&self, text: &str, font_size: Option<f64>, dpi: u32) -> SIZE {
-        let _text = TextGuard::apply(self.hdc, font_size, None, dpi);
+    pub fn text_extent(&self, text: &str, font_size: i32, default_font: LOGFONTW) -> SIZE {
+        let _text = TextGuard::apply(self.hdc, font_size, None, default_font);
         let wide = get_utf16_vec(text);
         let mut size = SIZE::default();
         unsafe {

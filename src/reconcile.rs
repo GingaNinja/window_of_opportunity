@@ -10,7 +10,11 @@
 // ---------------------------------------------------------------------------
 
 use crate::{
-    element::{Element, ElementType, PropType},
+    element::{
+        Element,
+        ElementType,
+        PropType,
+    },
     state::{Ctx, Handler, State},
 };
 

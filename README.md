@@ -71,7 +71,7 @@ The `simples` example running natively on each platform:
 
 ## Windows theming (comctl32 v6)
 
-On Windows, the examples in this repo run with the classic Win9x visual style because Cargo's example targets don't automatically receive embedded manifests from library build scripts. If you create a **binary crate** that depends on `window_of_opportunity`, embed a manifest that requests `comctl32` version 6 to get the modern themed look (gradients, rounded edit borders, etc.):
+If you want your app to be DPI aware on Windows, you will need to embed a manifest that requests `comctl32` version 6 to get the modern themed look (gradients, rounded edit borders, etc.):
 
 1. Add an `app.manifest` file next to your `Cargo.toml`:
 
@@ -103,6 +103,7 @@ On Windows, the examples in this repo run with the classic Win9x visual style be
 2. Add an `app.rc` resource definition file:
 
 ```
+#define RT_MANIFEST 24
 1 RT_MANIFEST "app.manifest"
 ```
 
@@ -117,9 +118,11 @@ embed-resource = "3.0"
 
 ```rust
 fn main() {
-    embed_resource::compile("app.rc", embed_resource::NONE)
-        .manifest_required()
-        .unwrap();
+    if cfg!(target_os = "windows") {
+        embed_resource::compile("app.rc", embed_resource::NONE)
+            .manifest_required()
+            .unwrap();
+    }
 }
 ```
 
