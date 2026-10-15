@@ -15,7 +15,7 @@
 use windows::Win32::Foundation::{RECT, SIZE};
 use windows::Win32::Graphics::Gdi::{
     CreateSolidBrush, DT_END_ELLIPSIS, DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawTextW,
-    FillRect, GetTextExtentPoint32W, HBRUSH, HDC, LOGFONTW,
+    FillRect, GetTextExtentPoint32W, HBRUSH, HDC,
 };
 
 use crate::{
@@ -25,14 +25,14 @@ use crate::{
 
 use super::{
     app::color_ref,
-    font::{font_pixels, TextGuard},
+    font::{TextGuard, font_pixels, text_ctx},
     stack::Rect,
     util::{calc_scaled, get_utf16_vec},
 };
 
 /// Paints an element tree into `area`. The walk mirrors stack::arrange:
 /// containers stack their children (column/row, gap, padding), leaves draw.
-pub fn paint_tree(hdc: HDC, el: &Element, area: Rect, dpi: u32, font: LOGFONTW) {
+pub fn paint_tree(hdc: HDC, el: &Element, area: Rect) {
     let style = FlexStyle::from_props(&el.props);
     let (pt, pr, pb, pl) = style.padding;
 
@@ -50,9 +50,8 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect, dpi: u32, font: LOGFONTW) 
             // row, every draw callback) inherits nothing
             let _text = TextGuard::apply(
                 hdc,
-                font_pixels(&el.props, font),
+                font_pixels(&el.props),
                 el.props.get_string(PropType::Color).map(color_ref),
-                font,
             );
             let mut wide = get_utf16_vec(text);
             let mut rect = to_rect(area);
@@ -92,7 +91,7 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect, dpi: u32, font: LOGFONTW) 
             let naturals: Vec<(i32, i32)> = el
                 .children
                 .iter()
-                .map(|child| natural_size(hdc, child, dpi, font))
+                .map(|child| natural_size(hdc, child))
                 .collect();
             let total_main: i32 = naturals
                 .iter()
@@ -139,8 +138,6 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect, dpi: u32, font: LOGFONTW) 
                         w: bw,
                         h: bh,
                     },
-                    dpi,
-                    font,
                 );
                 cursor += (if main_is_row { bw } else { bh }) + gap;
             }
@@ -151,7 +148,7 @@ pub fn paint_tree(hdc: HDC, el: &Element, area: Rect, dpi: u32, font: LOGFONTW) 
 /// The natural (hugging) size of an element, measured from the DC — rows
 /// have no widgets. Also the seam the row-height work wants (the tallest
 /// row = max over `natural_size` for each snapshot row).
-pub fn natural_size(hdc: HDC, el: &Element, dpi: u32, font: LOGFONTW) -> (i32, i32) {
+pub fn natural_size(hdc: HDC, el: &Element) -> (i32, i32) {
     let style = FlexStyle::from_props(&el.props);
     let (pt, pr, pb, pl) = style.padding;
 
@@ -159,9 +156,10 @@ pub fn natural_size(hdc: HDC, el: &Element, dpi: u32, font: LOGFONTW) -> (i32, i
         ElementType::Text(text) => {
             // measure under the same font painting will use — the row
             // heights derived from this depend on it
-            let _text = TextGuard::apply(hdc, font_pixels(&el.props, font), None, font);
+            let _text = TextGuard::apply(hdc, font_pixels(&el.props), None);
             let (tw, th) = text_extent(hdc, text);
             // label breathing room, scaled like any other chrome constant
+            let dpi = text_ctx().dpi;
             (
                 tw + calc_scaled(8., dpi) as i32,
                 th + calc_scaled(4., dpi) as i32,
@@ -171,7 +169,7 @@ pub fn natural_size(hdc: HDC, el: &Element, dpi: u32, font: LOGFONTW) -> (i32, i
             let gap = style.gap as i32;
             let (mut main, mut cross) = (0, 0);
             for child in el.children.iter() {
-                let (cw, ch) = natural_size(hdc, child, dpi, font);
+                let (cw, ch) = natural_size(hdc, child);
                 match style.direction {
                     Direction::Row => {
                         main += cw;

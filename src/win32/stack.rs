@@ -18,18 +18,13 @@
 
 use windows::Win32::{
     Foundation::HWND,
-    Graphics::Gdi::LOGFONTW,
     UI::WindowsAndMessaging::{GetParent, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos},
 };
 
 use crate::{
     element::{Element, ElementType, button_label},
     layout::{Direction, FlexStyle},
-    win32::{
-        dc::DeviceContext,
-        font::font_pixels,
-        util::calc_scaled,
-    },
+    win32::{dc::DeviceContext, font::{font_pixels, text_ctx}, util::calc_scaled},
 };
 
 use super::widgets::Widget;
@@ -44,7 +39,7 @@ pub struct Rect {
 }
 
 /// Arranges the tree inside `area`, positioning every leaf control.
-pub fn arrange(el: &Element, widget: &mut Widget, area: Rect, dpi: u32, font: LOGFONTW) {
+pub fn arrange(el: &Element, widget: &mut Widget, area: Rect) {
     let style = FlexStyle::from_props(&el.props);
     let (pt, pr, pb, pl) = style.padding;
 
@@ -88,7 +83,7 @@ pub fn arrange(el: &Element, widget: &mut Widget, area: Rect, dpi: u32, font: LO
         .children
         .iter()
         .zip(children.iter())
-        .map(|(child_el, child_widget)| natural(child_el, child_widget, dpi, font))
+        .map(|(child_el, child_widget)| natural(child_el, child_widget))
         .collect();
 
     let total_main: i32 = naturals
@@ -136,8 +131,6 @@ pub fn arrange(el: &Element, widget: &mut Widget, area: Rect, dpi: u32, font: LO
                 w: bw,
                 h: bh,
             },
-            dpi,
-            font,
         );
         cursor += (if main_is_row { bw } else { bh }) + gap;
     }
@@ -146,21 +139,19 @@ pub fn arrange(el: &Element, widget: &mut Widget, area: Rect, dpi: u32, font: LO
 /// The natural (hugging) size of a box: leaves measure their control,
 /// containers sum their children along the direction. Fixed width/height
 /// props always win.
-pub fn natural(el: &Element, widget: &Widget, dpi: u32, font: LOGFONTW) -> (i32, i32) {
+pub fn natural(el: &Element, widget: &Widget) -> (i32, i32) {
     let style = FlexStyle::from_props(&el.props);
     let (pt, pr, pb, pl) = style.padding;
 
     let (mut w, mut h) = match (widget, &el.element_type) {
-        (Widget::Button { hwnd, .. }, _) => measure_button(*hwnd, el, &button_label(el), dpi, font),
-        (Widget::Label { hwnd }, ElementType::Text(text)) => {
-            measure_text(*hwnd, el, text, dpi, font)
-        }
-        (Widget::Input { hwnd, .. }, _) => measure_input(*hwnd, el, dpi, font),
+        (Widget::Button { hwnd, .. }, _) => measure_button(*hwnd, el, &button_label(el)),
+        (Widget::Label { hwnd }, ElementType::Text(text)) => measure_text(*hwnd, el, text),
+        (Widget::Input { hwnd, .. }, _) => measure_input(*hwnd, el),
         (Widget::Container { children, .. }, _) => {
             let gap = style.gap as i32;
             let (mut main, mut cross) = (0, 0);
             for (child_el, child_widget) in el.children.iter().zip(children.iter()) {
-                let (cw, ch) = natural(child_el, child_widget, dpi, font);
+                let (cw, ch) = natural(child_el, child_widget);
                 match style.direction {
                     Direction::Row => {
                         main += cw;
@@ -224,18 +215,20 @@ fn place_hwnd(hwnd: HWND, x: i32, y: i32, w: i32, h: i32) {
     }
 }
 
-fn measure_text(hwnd: HWND, el: &Element, text: &str, dpi: u32, font: LOGFONTW) -> (i32, i32) {
-    let (w, h) = text_extent(hwnd, el, text, font);
+fn measure_text(hwnd: HWND, el: &Element, text: &str) -> (i32, i32) {
+    let (w, h) = text_extent(hwnd, el, text);
+    let dpi = text_ctx().dpi;
     (
         w + calc_scaled(2., dpi) as i32,
         h + calc_scaled(4., dpi) as i32,
     )
 }
 
-fn measure_button(hwnd: HWND, el: &Element, text: &str, dpi: u32, font: LOGFONTW) -> (i32, i32) {
+fn measure_button(hwnd: HWND, el: &Element, text: &str) -> (i32, i32) {
     // text extent + push-button chrome (the step-2 approximation of
     // BCM_GETIDEALSIZE, which arrives with the common-controls work)
-    let (w, h) = text_extent(hwnd, el, text, font);
+    let (w, h) = text_extent(hwnd, el, text);
+    let dpi = text_ctx().dpi;
     (
         w + calc_scaled(32., dpi) as i32,
         h + calc_scaled(14., dpi) as i32,
@@ -248,12 +241,13 @@ fn measure_button(hwnd: HWND, el: &Element, text: &str, dpi: u32, font: LOGFONTW
 /// puts on the control), so font_size moves the box exactly as it moves
 /// the text. Width stays the leaf default unless a width prop says
 /// otherwise (an input's width is the layout's business, not its text's).
-fn measure_input(hwnd: HWND, el: &Element, dpi: u32, font: LOGFONTW) -> (i32, i32) {
+fn measure_input(hwnd: HWND, el: &Element) -> (i32, i32) {
     let dc = DeviceContext::from(hwnd);
     // height from the FONT's line height, not the text (see above) — the
     // measure call scopes the element's font_size itself
-    let tm = dc.text_metrics(font_pixels(&el.props, font), font);
+    let tm = dc.text_metrics(font_pixels(&el.props));
     // + edit chrome: the WS_BORDER frame + the control's text margins
+    let dpi = text_ctx().dpi;
     (
         calc_scaled(80., dpi) as i32,
         tm.tmHeight + calc_scaled(8., dpi) as i32,
@@ -265,8 +259,8 @@ fn measure_input(hwnd: HWND, el: &Element, dpi: u32, font: LOGFONTW) -> (i32, i3
 /// the size it draws. (fixup_dpi has already resolved the prop to pixels;
 /// font_pixels falls back to the system font's height if it somehow
 /// didn't.)
-fn text_extent(hwnd: HWND, el: &Element, text: &str, font: LOGFONTW) -> (i32, i32) {
+fn text_extent(hwnd: HWND, el: &Element, text: &str) -> (i32, i32) {
     let dc = DeviceContext::from(hwnd);
-    let size = dc.text_extent(text, font_pixels(&el.props, font), font);
+    let size = dc.text_extent(text, font_pixels(&el.props));
     (size.cx, size.cy)
 }
