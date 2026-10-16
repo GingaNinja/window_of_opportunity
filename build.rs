@@ -1,4 +1,3 @@
-#[cfg(target_os = "windows")]
 extern crate embed_resource;
 
 fn main() {

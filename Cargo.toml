@@ -38,7 +38,7 @@ windows = { version = "0.62.2", features = [
     "Win32_System_Variant",
 ] }
 
-[target.'cfg(target_os = "windows")'.build-dependencies]
+[build-dependencies]
 embed-resource = "3.0.12"
 
 
