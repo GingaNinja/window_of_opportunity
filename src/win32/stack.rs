@@ -183,9 +183,17 @@ pub fn natural(el: &Element, widget: &Widget) -> (i32, i32) {
             // gives the control (see sync_lists) — sized so the full item
             // count is visible. The +2 is PER ROW: the control's item
             // spacing, added to every row (not once to the whole list).
-            (80, rows.len() as i32 * (row_height + 2))
+            // Chrome constants, so scaled like the measure_* ones below.
+            let dpi = text_ctx().dpi;
+            (
+                calc_scaled(80., dpi) as i32,
+                rows.len() as i32 * (row_height + calc_scaled(2., dpi) as i32),
+            )
         }
-        _ => (80, 24),
+        _ => {
+            let dpi = text_ctx().dpi;
+            (calc_scaled(80., dpi) as i32, calc_scaled(24., dpi) as i32)
+        }
     };
 
     if let Some(fw) = style.width {
