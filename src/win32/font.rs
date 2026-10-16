@@ -49,6 +49,14 @@ thread_local! {
 pub(super) fn refresh_text_ctx(dpi: u32) -> i32 {
     let template = system_font(dpi);
     let pixels = -template.lfHeight;
+    // the memoised font was built from the OLD template (and possibly the
+    // old dpi) — free it so the next draw rebuilds from the new one
+    FONT_MEMO.with(|m| {
+        if let Some(font) = m.get().1 {
+            let _ = unsafe { DeleteObject(font.into()) };
+        }
+        m.set((0, None));
+    });
     TEXT_CTX.with(|c| c.set(TextCtx { dpi, template }));
     pixels
 }
@@ -85,8 +93,8 @@ pub(super) fn font_pixels(props: &crate::element::Props) -> i32 {
 }
 
 /// The system font's face/weight at the given pixel height. The CALLER owns
-/// the handle: TextGuard frees it after painting, AppState's font cache
-/// keeps them alive for WM_SETFONT controls.
+/// the handle: paint/measure fonts go through `cached_font` (owned by the
+/// memo), AppState's font cache keeps WM_SETFONT ones alive.
 pub(super) fn create_font(pixel_height: i32) -> HFONT {
     // the app speaks positive pixel heights; GDI wants negative character
     // height — the sign flips exactly here
@@ -95,16 +103,46 @@ pub(super) fn create_font(pixel_height: i32) -> HFONT {
     unsafe { CreateFontIndirectW(&font) }
 }
 
+thread_local! {
+    /// One-entry memo for paint/measure fonts (the AppState font cache owns
+    /// WM_SETFONT fonts and never evicts; these are freely evictable).
+    /// Keyed by pixel height, so painting many rows at one size costs one
+    /// HFONT total instead of a CreateFontIndirectW + DeleteObject per
+    /// draw. Interleaved sizes thrash (rows of two sizes alternating) —
+    /// fine at one-entry scale; grow to a map only if a profile says so.
+    static FONT_MEMO: Cell<(i32, Option<HFONT>)> = Cell::new((0, None));
+}
+
+/// The paint/measure font at `pixel_height`, memoised. Do NOT free the
+/// returned handle — the memo owns it and frees it on eviction or on the
+/// next `refresh_text_ctx` (the system font template may have changed).
+pub(super) fn cached_font(pixel_height: i32) -> HFONT {
+    FONT_MEMO.with(|m| {
+        let (height, font) = m.get();
+        if height == pixel_height {
+            if let Some(font) = font {
+                return font;
+            }
+        }
+        if let Some(font) = font {
+            let _ = unsafe { DeleteObject(font.into()) }; // evict
+        }
+        let fresh = create_font(pixel_height);
+        m.set((pixel_height, Some(fresh)));
+        fresh
+    })
+}
+
 /// The text state for one draw/measure pass over a DC: the font at
 /// `font_size` (device pixels, on the system UI font's face so it looks
 /// native at any size), the text color, and a TRANSPARENT backdrop (text
 /// must never paint its own background box — measuring is blind to it).
-/// Drop puts ALL of it back the way it found it and frees the font, so a
-/// DC shared across rows/controls inherits nothing. A `None` color changes
-/// nothing — the DC's current one applies.
+/// Drop puts the DC's text state back the way it found it, so a DC shared
+/// across rows/controls inherits nothing. A `None` color changes nothing —
+/// the DC's current one applies. The FONT belongs to the memo, not to us:
+/// drop deselects it but never frees it (see `cached_font`).
 pub(super) struct TextGuard {
     hdc: HDC,
-    font: Option<HFONT>,
     prev_font: Option<HGDIOBJ>,
     prev_color: Option<COLORREF>,
     prev_bk: i32, // SetBkMode returns the previous mode as a raw int
@@ -114,13 +152,10 @@ impl TextGuard {
     pub(super) fn apply(hdc: HDC, font_size: i32, color: Option<COLORREF>) -> Self {
         let prev_color = color.map(|color| unsafe { SetTextColor(hdc, color) });
         let prev_bk = unsafe { SetBkMode(hdc, TRANSPARENT) };
-        let (font, prev_font) = {
-            let font = create_font(font_size);
-            (Some(font), Some(unsafe { SelectObject(hdc, font.into()) }))
-        };
+        let font = cached_font(font_size);
+        let prev_font = Some(unsafe { SelectObject(hdc, font.into()) });
         Self {
             hdc,
-            font,
             prev_font,
             prev_color,
             prev_bk,
@@ -131,12 +166,10 @@ impl TextGuard {
 impl Drop for TextGuard {
     fn drop(&mut self) {
         unsafe {
-            // deselect before freeing — DeleteObject refuses a selected font
+            // deselect — the memo owns the font and may evict it later,
+            // and DeleteObject refuses a font that is still selected
             if let Some(prev) = self.prev_font {
                 SelectObject(self.hdc, prev);
-            }
-            if let Some(font) = self.font {
-                let _ = DeleteObject(font.into());
             }
             if let Some(prev) = self.prev_color {
                 SetTextColor(self.hdc, prev);

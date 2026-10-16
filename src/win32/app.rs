@@ -93,6 +93,13 @@ impl Application {
             // want the HINSTANCE-shaped alias of the same handle)
             let hinst = HINSTANCE(GetModuleHandleW(None).expect("GetModuleHandleW").0);
 
+            // The scratch spec is still in LOGICAL units (fixup_dpi runs
+            // later) and the text ctx starts at 96 — seed it with the system
+            // dpi so the initial size scales. The first render after
+            // creation re-requests with the window's real monitor dpi, so
+            // any residual error is corrected before the window is shown.
+            refresh_text_ctx(GetDpiForSystem());
+
             // Render once before the window exists — same reason as macOS:
             // resizability is set at creation, and a specified size gives the
             // window its initial dimensions.
@@ -104,8 +111,9 @@ impl Application {
             // and the client rect needs no offset at all)
             let style = WS_OVERLAPPEDWINDOW;
             let ex_style = WS_EX_APPWINDOW | WS_EX_CONTROLPARENT;
-            let client_w = spec.width.unwrap_or(1024.) as i32;
-            let client_h = spec.height.unwrap_or(768.) as i32;
+            let dpi = text_ctx().dpi;
+            let client_w = calc_scaled(spec.width.unwrap_or(1024.), dpi) as i32;
+            let client_h = calc_scaled(spec.height.unwrap_or(768.), dpi) as i32;
             let mut rect = RECT {
                 left: 0,
                 top: 0,
@@ -924,6 +932,24 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     // resolves every font size to NEW pixels, so refresh_font
                     // sees changed props and re-issues WM_SETFONT.
                     refresh_text_ctx(current_dpi(hwnd));
+
+                    // Windows suggests the window rect that keeps the
+                    // window's on-screen size and position stable across
+                    // the change (old rect scaled by the new/old ratio) —
+                    // adopt it before rendering. render() then re-requests
+                    // the tree's scaled size on top of it, which lands on
+                    // the same numbers whenever the tree tracks the window.
+                    let suggested = &*(lparam.0 as *const RECT);
+                    let _ = SetWindowPos(
+                        hwnd,
+                        None,
+                        suggested.left,
+                        suggested.top,
+                        suggested.right - suggested.left,
+                        suggested.bottom - suggested.top,
+                        SWP_NOZORDER | SWP_NOACTIVATE,
+                    );
+
                     app.render();
                 } else {
                     println!("warning: WM_DPICHANGED during a render — dpi change dropped");
