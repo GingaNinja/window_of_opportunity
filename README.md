@@ -118,9 +118,9 @@ embed-resource = "3.0"
 
 ```rust
 fn main() {
-    if cfg!(target_os = "windows") {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") { {
         embed_resource::compile("app.rc", embed_resource::NONE)
-            .manifest_required()
+            .manifest_optional()
             .unwrap();
     }
 }
