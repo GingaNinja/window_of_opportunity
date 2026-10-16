@@ -3,9 +3,9 @@ extern crate embed_resource;
 
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(feature, values(\"cargo-clippy\"))");
-    if cfg!(target_os = "windows") {
-        embed_resource::compile_for_everything("app.rc", embed_resource::NONE)
-            .manifest_required()
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        embed_resource::compile_for_examples("app.rc", embed_resource::NONE)
+            .manifest_optional()
             .unwrap();
     }
 }
