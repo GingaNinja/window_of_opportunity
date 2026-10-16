@@ -792,7 +792,7 @@ dependencies = [
 
 [[package]]
 name = "window_of_opportunity"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "cacao",
  "embed-resource",

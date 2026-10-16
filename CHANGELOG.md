@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/GingaNinja/window_of_opportunity/compare/v0.5.4...v0.6.0) - 2026-10-16
+
+### Added
+
+- resolve font sizes (pt/em/px) and geometry once in fixup_dpi
+
+### Fixed
+
+- fix compile for macos
+- only embed the manifest for the examples, and only for windows targets
+- fix respond to wm_dpichanged
+- set dimensions and font size according to current monitor dpi
+- fix some missing bits
+- fixing todos with a previous change
+
+### Other
+
+- refresh simples size and screenshots
+- memoise paint fonts, scale remaining chrome, adopt WM_DPICHANGED rect
+- formatting fixes
+- single text context — drop dpi/font threading from measure+paint
+- add updated cargo.lock
+
 ## [0.5.4](https://github.com/GingaNinja/window_of_opportunity/compare/v0.5.3...v0.5.4) - 2026-10-08
 
 ### Other
