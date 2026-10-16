@@ -24,7 +24,11 @@ use windows::Win32::{
 use crate::{
     element::{Element, ElementType, button_label},
     layout::{Direction, FlexStyle},
-    win32::{dc::DeviceContext, font::{font_pixels, text_ctx}, util::calc_scaled},
+    win32::{
+        dc::DeviceContext,
+        font::{font_pixels, text_ctx},
+        util::calc_scaled,
+    },
 };
 
 use super::widgets::Widget;

@@ -41,11 +41,11 @@ impl Component for TodoItem {
     ) -> Box<window_of_opportunity::element::Element> {
         ui! {
             Div direction("column") {
-                { Text font_size(18.) {self.item.title.clone()} }
+                { Text font_size(em 1.5) {self.item.title.clone()} }
                 // a `match` as a child — every arm returns an element
                 { match self.item.status {
-                    TodoStatus::Complete => ui! { Text color("blue") font_size(10.) { "Complete".to_string() } },
-                    TodoStatus::Incomplete => ui! { Text color("red") font_size(10.) { "Incomplete".to_string() } },
+                    TodoStatus::Complete => ui! { Text color("green") font_size(em 1) { "Complete".to_string() } },
+                    TodoStatus::Incomplete => ui! { Text color("red") font_size(em 1) { "Incomplete".to_string() } },
                 } }
             }
         }

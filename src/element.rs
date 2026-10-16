@@ -886,18 +886,30 @@ mod length_tests {
     #[test]
     fn macro_font_size_units() {
         let el = ui! { Text font_size(pt 12.) { "x".to_string() } };
-        assert_eq!(el.props.get_length(PropType::FontSize), Some(Length::Pt(12.)));
+        assert_eq!(
+            el.props.get_length(PropType::FontSize),
+            Some(Length::Pt(12.))
+        );
 
         let el = ui! { Text font_size(em 1.5) { "x".to_string() } };
-        assert_eq!(el.props.get_length(PropType::FontSize), Some(Length::Em(1.5)));
+        assert_eq!(
+            el.props.get_length(PropType::FontSize),
+            Some(Length::Em(1.5))
+        );
 
         let el = ui! { Text font_size(px 16.) { "x".to_string() } };
-        assert_eq!(el.props.get_length(PropType::FontSize), Some(Length::Px(16.)));
+        assert_eq!(
+            el.props.get_length(PropType::FontSize),
+            Some(Length::Px(16.))
+        );
     }
 
     #[test]
     fn macro_bare_font_size_is_points() {
         let el = ui! { Text font_size(18.) { "x".to_string() } };
-        assert_eq!(el.props.get_length(PropType::FontSize), Some(Length::Pt(18.)));
+        assert_eq!(
+            el.props.get_length(PropType::FontSize),
+            Some(Length::Pt(18.))
+        );
     }
 }

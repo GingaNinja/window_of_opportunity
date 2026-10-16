@@ -549,9 +549,7 @@ impl AppState {
                     .collect();
                 let row_height = {
                     let dc = DeviceContext::from(parent);
-                    rows.iter()
-                        .map(|r| paint::natural_size(dc.hdc, r).1)
-                        .max()
+                    rows.iter().map(|r| paint::natural_size(dc.hdc, r).1).max()
                 }
                 .unwrap_or_else(|| calc_scaled(20., text_ctx().dpi) as i32);
                 let list_hwnd = create_list(parent, rows.len());
@@ -709,9 +707,7 @@ impl AppState {
                     .collect();
                 let measured = {
                     let dc = DeviceContext::from(*hwnd);
-                    rows.iter()
-                        .map(|r| paint::natural_size(dc.hdc, r).1)
-                        .max()
+                    rows.iter().map(|r| paint::natural_size(dc.hdc, r).1).max()
                 }
                 .unwrap_or_else(|| calc_scaled(20., text_ctx().dpi) as i32);
                 if measured != *row_height {
