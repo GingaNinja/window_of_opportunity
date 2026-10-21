@@ -1,4 +1,4 @@
-use std::{collections::HashMap, rc::Rc, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, rc::Rc, sync::Arc};
 
 use crate::{component::Component, state::Handler};
 
@@ -71,6 +71,7 @@ pub enum Prop {
     Usize(usize),
     String(String),
     Bool(bool),
+    ImageSource(ImageSource),
 }
 
 /// A length with an explicit unit — `font_size` is the only user so far.
@@ -190,6 +191,17 @@ impl Props {
     pub fn get_bool(&self, prop: PropType) -> Option<bool> {
         if let Some(Prop::Bool(val)) = self.0.get(&prop) {
             Some(*val)
+        } else {
+            None
+        }
+    }
+
+    /// The Image's source, by reference — frames are Arc-shared, so pull
+    /// one out without cloning (compare `BlitFrame::version` for change
+    /// detection; `PartialEq` walks every pixel).
+    pub fn get_source(&self, prop: PropType) -> Option<&ImageSource> {
+        if let Some(Prop::ImageSource(val)) = self.0.get(&prop) {
+            Some(val)
         } else {
             None
         }
@@ -510,8 +522,29 @@ macro_rules! ui {
     (@prop $el:ident, resizable($($val:tt)*)) => {
         ui!(@type_prop $el Resizable Bool ($($val)*));
     };
-    (@prop $el:ident, src($($val:tt)*)) => {
-        ui!(@type_prop $el Source String ($($val)*));
+    // Image sources carry a CONSTRUCTOR shape, not a plain value: the inner
+    // call (`file(...)`, `frame(...)`) is what distinguishes them from a
+    // bare expression, so each form gets its own arm. These MUST precede
+    // the generic fallback — `($($val:tt)*)` swallows `file("x.png")` too
+    // and would lower it per-token. Everything bottoms out in ImageSource
+    // (via From), so `source(binding)` also works for a path, a &str, or a
+    // prepared enum.
+    (@prop $el:ident, source(file($val:expr))) => {
+        $el.props.insert(
+            $crate::element::PropType::Source,
+            $crate::element::Prop::ImageSource($crate::element::ImageSource::File(
+                std::path::PathBuf::from($val),
+            )),
+        );
+    };
+    (@prop $el:ident, source(frame($val:expr))) => {
+        $el.props.insert(
+            $crate::element::PropType::Source,
+            $crate::element::Prop::ImageSource($crate::element::ImageSource::from($val)),
+        );
+    };
+    (@prop $el:ident, source($($val:tt)*)) => {
+        ui!(@type_prop $el Source ImageSource ($($val)*));
     };
     (@prop $el:ident, gap($($val:tt)*)) => {
         ui!(@type_prop $el Gap Float ($($val)*));
@@ -579,7 +612,7 @@ macro_rules! ui {
     (@prop $el:ident, $prop:ident($($val:tt)*)) => {
         compile_error!(concat!(
             "unknown prop `", stringify!($prop),
-            "` — known props: width, height, padding, gap, grow, direction, background, color, font_size, title, value, placeholder, src, resizable, rows",
+            "` — known props: width, height, padding, gap, grow, direction, background, color, font_size, title, value, placeholder, source(file(\"…\") | frame(…)), resizable, rows",
             " (handlers: on_click, on_resize, on_change, on_display_item)"
         ));
     };
@@ -627,16 +660,68 @@ macro_rules! ui {
     };
 }
 
+/// 0xAARRGGBB (AA is the optional alpha channel, but used for alignment regardless)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pixel(pub u32);
+
 /// Somewhere to hold some pixel data, to then add as src on an Image.
-/// (`src` on the Image element names the slot). `version` ticks per frame so
-/// the image widget can skip re-blitting unchanged data.
-#[derive(Clone)]
+/// (`source` on the Image element names the slot). `version` ticks per
+/// frame so the image widget can skip re-blitting unchanged data — compare
+/// `version` (or the Arc) for change detection, not `PartialEq`, which
+/// walks every pixel.
+#[derive(Clone, Debug, PartialEq)]
 pub struct BlitFrame {
     pub width: usize,
     pub height: usize,
     pub samples: u64,
-    pub pixels: Arc<Vec<u8>>,
+    pub pixels: Arc<Vec<Pixel>>,
     pub version: u64,
+}
+
+/// Where an Image gets its pixels: caller-supplied frames (custom drawing,
+/// animation) or a file on disk (decoded by the platform at load time).
+/// The `From` impls below power the `source(...)` macro forms.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ImageSource {
+    Frame(Arc<BlitFrame>),
+    File(PathBuf),
+}
+
+impl From<PathBuf> for ImageSource {
+    fn from(path: PathBuf) -> Self {
+        ImageSource::File(path)
+    }
+}
+
+impl From<&str> for ImageSource {
+    fn from(path: &str) -> Self {
+        ImageSource::File(PathBuf::from(path))
+    }
+}
+
+impl From<String> for ImageSource {
+    fn from(path: String) -> Self {
+        ImageSource::File(PathBuf::from(path))
+    }
+}
+
+impl From<BlitFrame> for ImageSource {
+    fn from(frame: BlitFrame) -> Self {
+        ImageSource::Frame(Arc::new(frame))
+    }
+}
+
+impl From<&BlitFrame> for ImageSource {
+    fn from(frame: &BlitFrame) -> Self {
+        // cheap: pixels are Arc-shared inside the frame
+        ImageSource::Frame(Arc::new(frame.clone()))
+    }
+}
+
+impl From<Arc<BlitFrame>> for ImageSource {
+    fn from(frame: Arc<BlitFrame>) -> Self {
+        ImageSource::Frame(frame)
+    }
 }
 
 impl BlitFrame {
@@ -672,6 +757,35 @@ mod tests {
             "content must survive: {:?}",
             el.element_type
         );
+    }
+
+    #[test]
+    fn image_source_sugar_forms_lower_to_the_enum() {
+        // file(...) — any path-ish value
+        let el = crate::ui! { Image source(file("logo.png")) };
+        assert!(
+            matches!(el.props.get_source(PropType::Source), Some(ImageSource::File(p)) if p == &PathBuf::from("logo.png")),
+            "file(...) must land as ImageSource::File: {:?}",
+            el.props.get_source(PropType::Source)
+        );
+
+        // frame(...) — owned, borrowed, or Arc'd (the clone is cheap:
+        // pixels are Arc-shared)
+        let frame = BlitFrame::empty();
+        let el = crate::ui! { Image source(frame(&frame)) };
+        assert!(matches!(el.props.get_source(PropType::Source), Some(ImageSource::Frame(f)) if f.version == frame.version));
+        let el = crate::ui! { Image source(frame(BlitFrame::empty())) };
+        assert!(matches!(el.props.get_source(PropType::Source), Some(ImageSource::Frame(_))));
+        let el = crate::ui! { Image source(frame(Arc::new(BlitFrame::empty()))) };
+        assert!(matches!(el.props.get_source(PropType::Source), Some(ImageSource::Frame(_))));
+
+        // bare values convert through Into<ImageSource>: a literal, or a
+        // prepared enum binding
+        let el = crate::ui! { Image source("logo.png") };
+        assert!(matches!(el.props.get_source(PropType::Source), Some(ImageSource::File(_))));
+        let prepared = ImageSource::File(PathBuf::from("prepared.png"));
+        let el = crate::ui! { Image source(prepared) };
+        assert!(matches!(el.props.get_source(PropType::Source), Some(ImageSource::File(p)) if p == &PathBuf::from("prepared.png")));
     }
 
     #[test]
@@ -711,10 +825,14 @@ mod typed_prop_tests {
     fn every_framework_consumed_prop_has_an_arm() {
         // these three props are read by layout/window_spec/Image mount —
         // if a macro arm goes missing, this test fails to compile
-        let el = crate::ui! { Image src("slot") width(2.) };
-        assert_eq!(
-            el.props.get_string(crate::element::PropType::Source),
-            Some("slot")
+        let el = crate::ui! { Image source("logo.png") width(2.) };
+        assert!(
+            matches!(
+                el.props.get_source(crate::element::PropType::Source),
+                Some(crate::element::ImageSource::File(p)) if p == &std::path::PathBuf::from("logo.png")
+            ),
+            "source(...) lowers to ImageSource: {:?}",
+            el.props.get_source(crate::element::PropType::Source)
         );
 
         let el = crate::ui! { Div grow(true) gap(4.) { { crate::ui! { Text "x" } } } };

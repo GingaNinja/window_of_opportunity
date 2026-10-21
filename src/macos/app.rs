@@ -114,7 +114,7 @@ impl Application {
     /// # use window_of_opportunity::{
     /// #     app::{Application, dispatch},
     /// #     component::Component,
-    /// #     element::{BlitFrame, Element},
+    /// #     element::Element,
     /// #     state::Ctx,
     /// #     ui,
     /// # };
@@ -1293,7 +1293,10 @@ fn set_frame(view: &ImageView, frame: &BlitFrame) {
             return;
         }
         let dst: *mut u8 = msg_send![rep, bitmapData];
-        std::ptr::copy_nonoverlapping(frame.pixels.as_ptr(), dst, frame.pixels.len());
+        // Pixel is 4 bytes (0xAARRGGBB) and bitmapData is a raw byte
+        // buffer, so the copy count is in BYTES, not in pixels
+        let bytes = frame.pixels.len() * std::mem::size_of::<crate::element::Pixel>();
+        std::ptr::copy_nonoverlapping(frame.pixels.as_ptr() as *const u8, dst, bytes);
 
         let image: *mut Object = msg_send![class!(NSImage), alloc];
         let image: *mut Object = msg_send![image, initWithSize:CGSize::new(w as f64, h as f64)];

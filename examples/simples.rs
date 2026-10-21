@@ -1,5 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-use window_of_opportunity::{app::Application, component::Component, ui};
+use window_of_opportunity::{app::Application, component::Component, element::BlitFrame, ui};
 
 /// A component with its own state: the count lives in a keyed slot that
 /// survives re-renders and full remounts — this is the hooks model.
@@ -102,11 +102,13 @@ impl Component for Window {
     ) -> Box<window_of_opportunity::element::Element> {
         let (w, h) = ctx.use_state("window/size", || (640., 820.));
         let first = ctx.use_state("first", || true);
+        let img = ctx.use_state("frame", || BlitFrame::empty());
         let title = if first {
             "One message"
         } else {
             "Another message"
         };
+
         ui! {
             Window width(w) height(h) title(title)
                    on_resize(|state, w, h|
@@ -121,7 +123,7 @@ impl Component for Window {
                     } }
                     { Counter thing("blah".into())} // a prop into counter
                     { Typing }
-                    { Div  background("green") grow(true) {} }
+                    { Image source(frame(img)) grow(true) {} }
                 } }
             }
         }
