@@ -6,7 +6,7 @@ use windows::Win32::{Foundation::*, Graphics::Gdi::*};
 /// Also has some useful methods for using with HDC
 pub struct DeviceContext {
     pub hdc: HDC,
-    ps: Option<PAINTSTRUCT>,
+    pub ps: Option<PAINTSTRUCT>,
     hwnd: HWND,
     tabs: Vec<i32>,
 }
@@ -39,6 +39,12 @@ impl DeviceContext {
             ps: Some(ps),
             hwnd,
             tabs: Vec::new(),
+        }
+    }
+
+    pub fn bit_blt(&self, x: i32, y: i32, cx: i32, cy: i32, src_hdc: HDC, x_src: i32, y_src: i32) {
+        unsafe {
+            let _ = BitBlt(self.hdc, x, y, cx, cy, Some(src_hdc), x_src, y_src, SRCCOPY);
         }
     }
 

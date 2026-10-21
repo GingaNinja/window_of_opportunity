@@ -62,6 +62,10 @@ pub enum Widget {
         row_height: i32,
         image_list: Option<HIMAGELIST>,
     },
+    Image {
+        hwnd: HWND,
+        background: Option<HBRUSH>,
+    },
 }
 
 /// Which neutral widget flavor is this — the platform half of the
@@ -74,6 +78,7 @@ impl Widget {
             Widget::Label { .. } => WidgetKind::Label,
             Widget::Input { .. } => WidgetKind::Input,
             Widget::List { .. } => WidgetKind::List,
+            Widget::Image { .. } => WidgetKind::Image,
         }
     }
 }
@@ -95,6 +100,14 @@ impl Drop for Widget {
             Widget::Container {
                 hwnd, background, ..
             } => unsafe {
+                if GetParent(*hwnd).is_ok() {
+                    let _ = DestroyWindow(*hwnd);
+                }
+                if let Some(brush) = background {
+                    let _ = DeleteObject((*brush).into());
+                }
+            },
+            Widget::Image { hwnd, background } => unsafe {
                 if GetParent(*hwnd).is_ok() {
                     let _ = DestroyWindow(*hwnd);
                 }

@@ -110,7 +110,7 @@ thread_local! {
     /// HFONT total instead of a CreateFontIndirectW + DeleteObject per
     /// draw. Interleaved sizes thrash (rows of two sizes alternating) —
     /// fine at one-entry scale; grow to a map only if a profile says so.
-    static FONT_MEMO: Cell<(i32, Option<HFONT>)> = Cell::new((0, None));
+    static FONT_MEMO: Cell<(i32, Option<HFONT>)> = const { Cell::new((0, None)) };
 }
 
 /// The paint/measure font at `pixel_height`, memoised. Do NOT free the
@@ -119,10 +119,10 @@ thread_local! {
 pub(super) fn cached_font(pixel_height: i32) -> HFONT {
     FONT_MEMO.with(|m| {
         let (height, font) = m.get();
-        if height == pixel_height {
-            if let Some(font) = font {
-                return font;
-            }
+        if height == pixel_height
+            && let Some(font) = font
+        {
+            return font;
         }
         if let Some(font) = font {
             let _ = unsafe { DeleteObject(font.into()) }; // evict

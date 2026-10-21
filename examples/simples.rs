@@ -1,5 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-use window_of_opportunity::{app::Application, component::Component, element::BlitFrame, ui};
+use std::sync::Arc;
+
+use window_of_opportunity::{
+    app::Application,
+    component::Component,
+    element::{BlitFrame, Pixel},
+    ui,
+};
 
 /// A component with its own state: the count lives in a keyed slot that
 /// survives re-renders and full remounts — this is the hooks model.
@@ -102,7 +109,26 @@ impl Component for Window {
     ) -> Box<window_of_opportunity::element::Element> {
         let (w, h) = ctx.use_state("window/size", || (640., 820.));
         let first = ctx.use_state("first", || true);
-        let img = ctx.use_state("frame", || BlitFrame::empty());
+        let img = ctx.use_state("frame", || {
+            let width = 600;
+            let height = 400;
+            let mut pixels = vec![Pixel(0); width * height];
+            let mut frame = BlitFrame::new(width, height);
+            let pitch = width;
+            let mut row = 0;
+            for y in 0..height {
+                let mut pixel = row;
+                for x in 0..width {
+                    let b = x as u8;
+                    let g = y as u8;
+                    pixels[pixel as usize] = Pixel((g as u32) << 8 | b as u32);
+                    pixel += 1;
+                }
+                row += pitch;
+            }
+            frame.pixels = Arc::new(pixels);
+            frame
+        });
         let title = if first {
             "One message"
         } else {

@@ -151,6 +151,13 @@ pub fn natural(el: &Element, widget: &Widget) -> (i32, i32) {
         (Widget::Button { hwnd, .. }, _) => measure_button(*hwnd, el, &button_label(el)),
         (Widget::Label { hwnd }, ElementType::Text(text)) => measure_text(*hwnd, el, text),
         (Widget::Input { hwnd, .. }, _) => measure_input(*hwnd, el),
+        (Widget::Image { .. }, _) => {
+            let (main, cross) = (0, 0);
+            match style.direction {
+                Direction::Row => (main + (pl + pr) as i32, cross + (pt + pb) as i32),
+                Direction::Column => (cross + (pl + pr) as i32, main + (pt + pb) as i32),
+            }
+        }
         (Widget::Container { children, .. }, _) => {
             let gap = style.gap as i32;
             let (mut main, mut cross) = (0, 0);
@@ -210,7 +217,8 @@ fn place(widget: &Widget, x: i32, y: i32, w: i32, h: i32) {
         Widget::Button { hwnd, .. }
         | Widget::Label { hwnd }
         | Widget::Input { hwnd, .. }
-        | Widget::List { hwnd, .. } => *hwnd,
+        | Widget::List { hwnd, .. }
+        | Widget::Image { hwnd, .. } => *hwnd,
         Widget::Container { .. } => return,
     };
     place_hwnd(hwnd, x, y, w, h);

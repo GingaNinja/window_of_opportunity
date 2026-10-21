@@ -9,7 +9,7 @@
               processorArchitecture="*" 
               publicKeyToken="6595b64144ccf1df" 
               language="*"/>
-        </dependentAssembly>
+        </dependentAssembly>    
     </dependency>
     <ms_asmv2:trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
         <ms_asmv2:security>

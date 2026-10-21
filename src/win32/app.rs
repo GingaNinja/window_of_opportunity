@@ -44,14 +44,14 @@ use windows::{
 
 use crate::{
     component::Component,
-    element::{Element, ElementType, Prop, PropType, button_label, window_spec},
+    element::{Element, ElementType, ImageSource, Prop, PropType, button_label, window_spec},
     reconcile,
     state::{Ctx, Event, Handler, Handlers, State},
 };
 
 use super::{
     dc::DeviceContext,
-    div::{create_div, register_div_class},
+    div::{create_div, register_div_class, set_background, set_image_source},
     font::{create_font, font_pixels, refresh_text_ctx, text_ctx},
     list::{create_list, notify, sync_lists},
     paint,
@@ -492,7 +492,7 @@ impl AppState {
                 // cacao view: it paints its own background and its
                 // children's controls live inside it
                 let background = el.props.get_string(PropType::Background).map(color_brush);
-                let hwnd = create_div(parent, background);
+                let hwnd = create_div(parent, background, None);
                 Widget::Container {
                     hwnd,
                     background,
@@ -575,7 +575,13 @@ impl AppState {
                 }
             }
             ElementType::Image => {
-                todo!("win32: Image not yet implemented")
+                // a Div is a real child window — the win32 analogue of the
+                // cacao view: it paints its own background and its
+                // children's controls live inside it
+                let background = el.props.get_string(PropType::Background).map(color_brush);
+                let image_source = el.props.get_source(PropType::Source);
+                let hwnd = create_div(parent, background, image_source);
+                Widget::Image { hwnd, background }
             }
             ElementType::Component(_) => {
                 unreachable!("component elements are expanded before mounting")
@@ -650,6 +656,9 @@ impl AppState {
         match (widget, &new_el.element_type) {
             (widget @ Widget::Container { .. }, ElementType::Window | ElementType::Div) => {
                 self.patch_container(widget, old_el, new_el);
+            }
+            (widget @ Widget::Image { .. }, ElementType::Image) => {
+                self.patch_image(widget, old_el, new_el);
             }
             (Widget::Button { hwnd, on_click }, ElementType::Button) => {
                 self.refresh_font(old_el, new_el, *hwnd);
@@ -736,6 +745,51 @@ impl AppState {
             }
             // the caller only patches compatible pairs
             _ => unreachable!("patch called on an incompatible widget/element pair"),
+        }
+    }
+
+    fn patch_image(&self, widget: &mut Widget, old_el: &Element, new_el: &Element) {
+        let Widget::Image { hwnd, background } = widget else {
+            unreachable!("patch_image called on a non-image")
+        };
+
+        // Reconcile the source: compare cheap identity (frames are
+        // Arc-shared and versioned) — never Prop PartialEq, which walks
+        // every pixel. The div paints the CURRENT source, so a swapped
+        // frame shows on the next paint.
+        let source_changed = match (
+            old_el.props.get_source(PropType::Source),
+            new_el.props.get_source(PropType::Source),
+        ) {
+            (Some(ImageSource::Frame(a)), Some(ImageSource::Frame(b))) => {
+                !(std::sync::Arc::ptr_eq(&a.pixels, &b.pixels) && a.version == b.version)
+            }
+            (a, b) => a != b,
+        };
+        if source_changed {
+            if let Some(source) = new_el.props.get_source(PropType::Source).cloned() {
+                set_image_source(*hwnd, source);
+            }
+        }
+
+        // Reconcile the background prop (visual only) — the cacao twin of
+        // this block sets the NSView's color. The brush is WIDGET-owned
+        // (its Drop frees it); the div keeps a copy to paint with, so the
+        // state lives in the Rc<Div> — GWLP_USERDATA must NOT be touched
+        // here, it IS that Rc.
+        if old_el.props.get_string(PropType::Background)
+            != new_el.props.get_string(PropType::Background)
+        {
+            let new_brush = new_el
+                .props
+                .get_string(PropType::Background)
+                .map(color_brush);
+            if let Some(old) = std::mem::replace(background, new_brush) {
+                unsafe {
+                    let _ = DeleteObject(old.into());
+                }
+            }
+            set_background(*hwnd, *background);
         }
     }
 

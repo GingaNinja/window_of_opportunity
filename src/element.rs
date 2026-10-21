@@ -734,6 +734,15 @@ impl BlitFrame {
             version: 0,
         }
     }
+    pub fn new(width: usize, height: usize) -> Self {
+        Self {
+            width,
+            height,
+            samples: 3,
+            pixels: Arc::new(vec![Pixel(0); width * height]),
+            version: 0,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -773,19 +782,32 @@ mod tests {
         // pixels are Arc-shared)
         let frame = BlitFrame::empty();
         let el = crate::ui! { Image source(frame(&frame)) };
-        assert!(matches!(el.props.get_source(PropType::Source), Some(ImageSource::Frame(f)) if f.version == frame.version));
+        assert!(
+            matches!(el.props.get_source(PropType::Source), Some(ImageSource::Frame(f)) if f.version == frame.version)
+        );
         let el = crate::ui! { Image source(frame(BlitFrame::empty())) };
-        assert!(matches!(el.props.get_source(PropType::Source), Some(ImageSource::Frame(_))));
+        assert!(matches!(
+            el.props.get_source(PropType::Source),
+            Some(ImageSource::Frame(_))
+        ));
         let el = crate::ui! { Image source(frame(Arc::new(BlitFrame::empty()))) };
-        assert!(matches!(el.props.get_source(PropType::Source), Some(ImageSource::Frame(_))));
+        assert!(matches!(
+            el.props.get_source(PropType::Source),
+            Some(ImageSource::Frame(_))
+        ));
 
         // bare values convert through Into<ImageSource>: a literal, or a
         // prepared enum binding
         let el = crate::ui! { Image source("logo.png") };
-        assert!(matches!(el.props.get_source(PropType::Source), Some(ImageSource::File(_))));
+        assert!(matches!(
+            el.props.get_source(PropType::Source),
+            Some(ImageSource::File(_))
+        ));
         let prepared = ImageSource::File(PathBuf::from("prepared.png"));
         let el = crate::ui! { Image source(prepared) };
-        assert!(matches!(el.props.get_source(PropType::Source), Some(ImageSource::File(p)) if p == &PathBuf::from("prepared.png")));
+        assert!(
+            matches!(el.props.get_source(PropType::Source), Some(ImageSource::File(p)) if p == &PathBuf::from("prepared.png"))
+        );
     }
 
     #[test]
