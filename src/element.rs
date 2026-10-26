@@ -27,6 +27,37 @@ pub enum ElementType {
     Component(Rc<dyn Component>),
 }
 
+/// Structural equality on RENDERED output: same kinds, props, text and
+/// children. Handlers are deliberately ignored — they are fresh closures
+/// every render and never change what's drawn. This is the comparison
+/// reconciliation uses to leave untouched widgets completely alone (a
+/// re-render must not disturb what didn't change — that's what flickers).
+impl PartialEq for Element {
+    fn eq(&self, other: &Self) -> bool {
+        self.element_type == other.element_type
+            && self.props == other.props
+            && self.children == other.children
+    }
+}
+
+impl PartialEq for ElementType {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ElementType::Text(a), ElementType::Text(b)) => a == b,
+            // component identity: two different instances may render
+            // differently, so only an identical Rc counts as unchanged
+            (ElementType::Component(a), ElementType::Component(b)) => Rc::ptr_eq(a, b),
+            _ => std::mem::discriminant(self) == std::mem::discriminant(other),
+        }
+    }
+}
+
+impl PartialEq for Props {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
 /// Window-level props, parsed from the tree root (the Window element).
 /// Parsed once before the window exists — style masks (resizability) can only be
 /// set at creation — and again on every render, since sizing is live.
@@ -829,6 +860,25 @@ mod tests {
         assert!(
             matches!(el.props.get_source(PropType::Source), Some(ImageSource::File(p)) if p == &PathBuf::from("prepared.png"))
         );
+    }
+
+    #[test]
+    fn rendered_equality_ignores_handlers() {
+        // same output, different closures — must compare EQUAL: that is
+        // what lets reconciliation leave a widget completely alone
+        let state = crate::state::State::default();
+        let ctx = crate::state::Ctx { state: &state };
+        let a = crate::ui! { Button on_click(ctx.effect(|_s: &crate::state::State| ())) { Text "ok" } };
+        let b = crate::ui! { Button on_click(ctx.effect(|_s: &crate::state::State| ())) { Text "ok" } };
+        assert_eq!(a, b, "fresh handlers every render must still compare equal");
+
+        // changed output must compare UNEQUAL
+        let c = crate::ui! { Button on_click(ctx.effect(|_s: &crate::state::State| ())) { Text "other" } };
+        assert_ne!(a, c, "different text is different output");
+        let d = crate::ui! { Div width(2.) { { crate::ui! { Text "x" } } } };
+        let e = crate::ui! { Div width(3.) { { crate::ui! { Text "x" } } } };
+        assert_ne!(d, e, "different props are different output");
+        assert_eq!(d, crate::ui! { Div width(2.) { { crate::ui! { Text "x" } } } });
     }
 
     #[test]

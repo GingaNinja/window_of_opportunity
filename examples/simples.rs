@@ -99,16 +99,14 @@ impl Component for Typing {
 }
 
 #[derive(Debug, Default)]
-struct Window {}
+struct Imaging {}
 
-impl Component for Window {
+impl Component for Imaging {
     fn render(
         &self,
         ctx: &window_of_opportunity::state::Ctx,
         _children: Vec<Box<window_of_opportunity::element::Element>>,
     ) -> Box<window_of_opportunity::element::Element> {
-        let (w, h) = ctx.use_state("window/size", || (640., 820.));
-        let first = ctx.use_state("first", || true);
         // --- the RepaintHandle in action -------------------------------
         // A ticker thread says "hey, re-render" five times a second, and
         // this render simply SAMPLES THE CLOCK for the gradient — the
@@ -120,16 +118,35 @@ impl Component for Window {
         // redraws JUST it (no render) and handle.rerender() runs the loop.
         let repaint = ctx.use_repaint("anim");
         ctx.use_state("ticker", || {
-            std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_millis(200));
-                repaint.rerender();
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                    repaint.rerender();
+                }
             });
         });
         let phase = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_millis() / 200)
+            .map(|d| (d.as_millis() as f64 / 25.) as i128)
             .unwrap_or(0) as usize;
         let img = gradient_frame(phase);
+
+        ui! { Image source(frame(img)) repaint(repaint) grow(true) {} }
+    }
+}
+
+#[derive(Debug, Default)]
+struct Window {}
+
+impl Component for Window {
+    fn render(
+        &self,
+        ctx: &window_of_opportunity::state::Ctx,
+        _children: Vec<Box<window_of_opportunity::element::Element>>,
+    ) -> Box<window_of_opportunity::element::Element> {
+        let (w, h) = ctx.use_state("window/size", || (640., 820.));
+        let first = ctx.use_state("first", || true);
+
         let title = if first {
             "One message"
         } else {
@@ -150,7 +167,7 @@ impl Component for Window {
                     } }
                     { Counter thing("blah".into())} // a prop into counter
                     { Typing }
-                    { Image source(frame(img)) repaint(repaint) grow(true) {} }
+                    { Imaging }
                 } }
             }
         }

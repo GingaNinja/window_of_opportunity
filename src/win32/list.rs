@@ -13,7 +13,7 @@ use windows::{
                 LVCF_MINWIDTH, LVCF_WIDTH, LVCFMT_LEFT, LVCOLUMNW, LVM_GETITEMRECT,
                 LVM_INSERTCOLUMN, LVM_SETCOLUMNWIDTH, LVM_SETEXTENDEDLISTVIEWSTYLE,
                 LVM_SETIMAGELIST, LVM_SETITEMCOUNT, LVN_ITEMCHANGED, LVN_ODCACHEHINT,
-                LVN_ODSTATECHANGED, LVS_EX_FULLROWSELECT, LVS_NOCOLUMNHEADER, LVS_OWNERDATA,
+                LVN_ODSTATECHANGED, LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT, LVS_NOCOLUMNHEADER, LVS_OWNERDATA,
                 LVS_REPORT, LVS_SHOWSELALWAYS, LVSIL_SMALL, NM_CUSTOMDRAW, NMCUSTOMDRAW, NMHDR,
             },
             WindowsAndMessaging::*,
@@ -59,11 +59,14 @@ pub fn create_list(parent: HWND, count: usize) -> HWND {
         // item with no text that box is a ~48px stub, so clicks past it
         // never select and the highlight is a sliver. With this style
         // the whole row is the hit target.
+        // LVS_EX_DOUBLEBUFFER: without it every invalidation erases and
+        // repaints visibly — at animation rates the whole list flashes.
+        let styles = LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER;
         SendMessageW(
             hwnd,
             LVM_SETEXTENDEDLISTVIEWSTYLE,
-            Some(WPARAM(LVS_EX_FULLROWSELECT as usize)),
-            Some(LPARAM(LVS_EX_FULLROWSELECT as isize)),
+            Some(WPARAM(styles as usize)),
+            Some(LPARAM(styles as isize)),
         );
         SendMessageW(hwnd, LVM_SETITEMCOUNT, Some(WPARAM(count)), None);
     }

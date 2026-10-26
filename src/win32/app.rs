@@ -742,13 +742,24 @@ impl AppState {
                 },
                 ElementType::List,
             ) => {
-                // refresh the snapshot wholesale (the render's rows) and
-                // tell the control the new count — it re-asks for whatever
-                // is visible, same as the macOS reload() pass
-                *rows = reconcile::snapshot_rows(&self.state, new_el)
+                // refresh the snapshot wholesale (the render's rows) —
+                // but ONLY when it renders differently. Untouched lists
+                // stay completely alone (no measure, no SETITEMCOUNT, no
+                // repaint): a re-render must not disturb what didn't
+                // change, or a fast animation flickers every other widget.
+                // Handlers are ignored by Element's PartialEq for exactly
+                // this — they're fresh closures every render.
+                let new_rows: Vec<Box<Element>> = reconcile::snapshot_rows(&self.state, new_el)
                     .into_iter()
                     .map(|r| self.fixup_dpi(&r))
                     .collect();
+                let count_changed = new_rows.len() != rows.len();
+                let rows_changed =
+                    count_changed || new_rows.iter().zip(rows.iter()).any(|(a, b)| a != b);
+                if !rows_changed {
+                    return;
+                }
+                *rows = new_rows;
                 let measured = {
                     let dc = DeviceContext::from(*hwnd);
                     rows.iter().map(|r| paint::natural_size(dc.hdc, r).1).max()
@@ -767,7 +778,14 @@ impl AppState {
                     }
                 }
                 unsafe {
-                    SendMessageW(*hwnd, LVM_SETITEMCOUNT, Some(WPARAM(rows.len())), None);
+                    if count_changed {
+                        // count change: the control re-queries its items
+                        SendMessageW(*hwnd, LVM_SETITEMCOUNT, Some(WPARAM(rows.len())), None);
+                    } else {
+                        // same count, new content: let the custom-draw
+                        // rows repaint (double-buffered, so no flash)
+                        let _ = InvalidateRect(Some(*hwnd), None, false);
+                    }
                 }
             }
             // the caller only patches compatible pairs
