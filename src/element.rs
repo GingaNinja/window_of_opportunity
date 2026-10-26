@@ -72,6 +72,9 @@ pub enum Prop {
     String(String),
     Bool(bool),
     ImageSource(ImageSource),
+    /// The element's repaint-handle id (the `repaint(...)` prop) — the
+    /// framework binds it to the widget at mount.
+    Repaint(usize),
 }
 
 /// A length with an explicit unit — `font_size` is the only user so far.
@@ -133,6 +136,7 @@ pub enum PropType {
     Gap,
     Padding,
     Grow,
+    Repaint,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -202,6 +206,15 @@ impl Props {
     pub fn get_source(&self, prop: PropType) -> Option<&ImageSource> {
         if let Some(Prop::ImageSource(val)) = self.0.get(&prop) {
             Some(val)
+        } else {
+            None
+        }
+    }
+
+    /// The RepaintHandle id bound to this element (the `repaint(...)` prop).
+    pub fn get_repaint(&self, prop: PropType) -> Option<usize> {
+        if let Some(Prop::Repaint(id)) = self.0.get(&prop) {
+            Some(*id)
         } else {
             None
         }
@@ -545,6 +558,14 @@ macro_rules! ui {
     };
     (@prop $el:ident, source($($val:tt)*)) => {
         ui!(@type_prop $el Source ImageSource ($($val)*));
+    };
+    // binds a RepaintHandle to this element: `repaint(repaint)` — the
+    // element then answers `handle.repaint()` / `handle.rerender()`
+    (@prop $el:ident, repaint($val:expr)) => {
+        $el.props.insert(
+            $crate::element::PropType::Repaint,
+            $crate::element::Prop::Repaint(($val).id),
+        );
     };
     (@prop $el:ident, gap($($val:tt)*)) => {
         ui!(@type_prop $el Gap Float ($($val)*));

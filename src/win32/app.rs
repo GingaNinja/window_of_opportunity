@@ -67,6 +67,11 @@ pub use crate::state::Message;
 /// `Box<dyn Any + Send>`). Widget events need no queue at all — WM_COMMAND
 /// arrives in-loop and resolves by hwnd.
 const WM_APP_MSG: u32 = WM_APP + 2;
+
+/// RepaintHandle requests ride the queue as `WM_APP + 4` (wparam = the
+/// handle id, lparam = 0 for repaint, 1 for rerender) — WM_APP + 3 is
+/// taken by WM_GET_BG_BRUSH.
+const WM_APP_REPAINT: u32 = WM_APP + 4;
 /// "what brush do you paint with?" — asked by undecorated divs that
 /// inherit their parent's backdrop (the transparent-NSView behavior)
 pub const WM_GET_BG_BRUSH: u32 = WM_APP + 3;
@@ -146,6 +151,7 @@ impl Application {
                 on_app_message,
                 last_requested_size: Cell::new(None),
                 fonts: RefCell::new(HashMap::new()),
+                repaint_targets: RefCell::new(HashMap::new()),
             }));
 
             // hand the Rc to the window via lpParam — WM_NCCREATE parks it
@@ -169,6 +175,17 @@ impl Application {
             .expect("CreateWindowExW");
             state.borrow_mut().hwnd = hwnd;
             MAIN_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+
+            // where RepaintHandle requests land: any thread → the main
+            // queue (the same Send boundary as dispatch)
+            crate::state::install_repaint_sink(|id, rerender| {
+                let _ = PostMessageW(
+                    Some(HWND(MAIN_HWND.load(Ordering::SeqCst) as *mut _)),
+                    WM_APP_REPAINT,
+                    WPARAM(id),
+                    LPARAM(rerender as isize),
+                );
+            });
 
             // the dpi + system font template live in font::text_ctx — the
             // one source every measure/paint/fixup reads
@@ -304,6 +321,9 @@ pub(crate) struct AppState {
     /// app requests thousands of distinct heights in one session — then
     /// evict keys the current tree's font_size props don't reference.
     fonts: RefCell<HashMap<i32, HFONT>>,
+    /// RepaintHandle id → the bound widget's window (the fast lane:
+    /// invalidate directly, no render).
+    repaint_targets: RefCell<HashMap<usize, HWND>>,
 }
 
 /// WM_SETFONT fonts must outlive the controls that wear them, so this
@@ -476,7 +496,7 @@ impl AppState {
     }
 
     fn mount_element(&self, parent: HWND, el: &Element) -> Widget {
-        match &el.element_type {
+        let widget = match &el.element_type {
             // the root's container hwnd IS the window itself
             ElementType::Window => Widget::Container {
                 hwnd: parent,
@@ -586,7 +606,14 @@ impl AppState {
             ElementType::Component(_) => {
                 unreachable!("component elements are expanded before mounting")
             }
+        };
+
+        // the `repaint(...)` prop binds a RepaintHandle to this widget, so
+        // handle.repaint() can invalidate it directly
+        if let Some(id) = el.props.get_repaint(PropType::Repaint) {
+            self.repaint_targets.borrow_mut().insert(id, widget.hwnd());
         }
+        widget
     }
 
     /// Creates a child control. `style` is the class-specific style bits
@@ -766,10 +793,8 @@ impl AppState {
             }
             (a, b) => a != b,
         };
-        if source_changed {
-            if let Some(source) = new_el.props.get_source(PropType::Source).cloned() {
-                set_image_source(*hwnd, source);
-            }
+        if source_changed && let Some(source) = new_el.props.get_source(PropType::Source).cloned() {
+            set_image_source(*hwnd, source);
         }
 
         // Reconcile the background prop (visual only) — the cacao twin of
@@ -963,6 +988,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 if let Ok(mut app) = app.try_borrow_mut() {
                     app.deliver_app_message(message);
                     app.render();
+                }
+                return LRESULT(0);
+            }
+            WM_APP_REPAINT => {
+                // the RepaintHandle fast lane — from any thread, no payload
+                let id = wparam.0;
+                let rerender = lparam.0 != 0;
+                if let Ok(mut app) = app.try_borrow_mut() {
+                    if rerender {
+                        app.render();
+                    } else if let Some(hwnd) = app.repaint_targets.borrow().get(&id) {
+                        let _ = InvalidateRect(Some(*hwnd), None, false);
+                    }
                 }
                 return LRESULT(0);
             }

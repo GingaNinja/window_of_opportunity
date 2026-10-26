@@ -109,26 +109,27 @@ impl Component for Window {
     ) -> Box<window_of_opportunity::element::Element> {
         let (w, h) = ctx.use_state("window/size", || (640., 820.));
         let first = ctx.use_state("first", || true);
-        let img = ctx.use_state("frame", || {
-            let width = 600;
-            let height = 400;
-            let mut pixels = vec![Pixel(0); width * height];
-            let mut frame = BlitFrame::new(width, height);
-            let pitch = width;
-            let mut row = 0;
-            for y in 0..height {
-                let mut pixel = row;
-                for x in 0..width {
-                    let b = x as u8;
-                    let g = y as u8;
-                    pixels[pixel as usize] = Pixel((g as u32) << 8 | b as u32);
-                    pixel += 1;
-                }
-                row += pitch;
-            }
-            frame.pixels = Arc::new(pixels);
-            frame
+        // --- the RepaintHandle in action -------------------------------
+        // A ticker thread says "hey, re-render" five times a second, and
+        // this render simply SAMPLES THE CLOCK for the gradient — the
+        // content is derived at render time, the handle is only the
+        // invalidation signal. That's the whole idea: whatever changed
+        // (time, a sensor, a stream) lives outside the framework; the
+        // handle just tells it to run again. `repaint(repaint)` on the
+        // Image binds the same handle to that element, so handle.repaint()
+        // redraws JUST it (no render) and handle.rerender() runs the loop.
+        let repaint = ctx.use_repaint("anim");
+        ctx.use_state("ticker", || {
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                repaint.rerender();
+            });
         });
+        let phase = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_millis() / 200)
+            .unwrap_or(0) as usize;
+        let img = gradient_frame(phase);
         let title = if first {
             "One message"
         } else {
@@ -149,11 +150,30 @@ impl Component for Window {
                     } }
                     { Counter thing("blah".into())} // a prop into counter
                     { Typing }
-                    { Image source(frame(img)) grow(true) {} }
+                    { Image source(frame(img)) repaint(repaint) grow(true) {} }
                 } }
             }
         }
     }
+}
+
+/// A gradient that shifts with `phase` — derived at render time like any
+/// good React output. `version` ticks with the phase so the image widget
+/// can tell frames apart (and skip re-blitting unchanged ones).
+fn gradient_frame(phase: usize) -> BlitFrame {
+    let (width, height) = (600, 400);
+    let mut pixels = vec![Pixel(0); width * height];
+    for y in 0..height {
+        for x in 0..width {
+            let b = ((x + phase * 17) & 0xff) as u32;
+            let g = (y & 0xff) as u32;
+            pixels[y * width + x] = Pixel(0xFF00_0000 | (g << 8) | b);
+        }
+    }
+    let mut frame = BlitFrame::new(width, height);
+    frame.pixels = Arc::new(pixels);
+    frame.version = phase as u64;
+    frame
 }
 
 fn main() {

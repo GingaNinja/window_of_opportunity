@@ -8,6 +8,10 @@ use std::{
     collections::HashMap,
     fmt::{self, Debug},
     rc::Rc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        OnceLock,
+    },
 };
 
 use crate::element::Element;
@@ -36,6 +40,13 @@ impl State {
             Some(v) => v.clone(),
             None => panic!("state slot `{key}` holds a different type"),
         }
+    }
+
+    /// use_repaint: read (or mint) this key's repaint handle. Stable per
+    /// key across renders — hand it to `repaint(...)` on the element(s)
+    /// that should answer the signal, and keep one to call later.
+    pub fn use_repaint(&self, key: &str) -> RepaintHandle {
+        self.use_state(key, RepaintHandle::fresh)
     }
 
     /// Applies an updater to a slot.
@@ -129,6 +140,12 @@ impl Debug for Event {
 pub enum Message<M> {
     /// a widget event fired — look up its handler by dispatch id
     Event(usize),
+    /// "my element's pixels changed in place — repaint it, don't touch
+    /// layout" (the RepaintHandle fast lane)
+    Repaint(usize),
+    /// "state my element renders may have changed — run the loop";
+    /// the id scopes the target (whole-tree render today, subtree later)
+    Rerender(usize),
     /// an app message, from anywhere
     App(M),
 }
@@ -207,6 +224,58 @@ impl Handlers {
     }
 }
 
+/// A component's "hey, re-render me" token — the invalidation signal
+/// (egui's `request_repaint`, Flutter's `markNeedsBuild`). `Copy + Send`,
+/// so handlers, timers and worker threads can all hold one.
+///
+/// `use_repaint(key)` hands one out per key, stable across renders like
+/// every hook. The id is internal plumbing: bind it to an element with the
+/// `repaint(...)` prop and nothing else needs to know it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RepaintHandle {
+    pub id: usize,
+}
+
+/// Where repaint requests land — installed by `Application::run` (the one
+/// place the platform dispatcher is nameable), called from any thread.
+/// `false` = repaint (paint-only), `true` = rerender (state → render).
+static REPAINT_SINK: OnceLock<Box<dyn Fn(usize, bool) + Send + Sync>> = OnceLock::new();
+static NEXT_REPAINT_ID: AtomicUsize = AtomicUsize::new(1);
+
+/// First install wins (a test may install a recording sink first).
+pub fn install_repaint_sink(sink: impl Fn(usize, bool) + Send + Sync + 'static) {
+    let _ = REPAINT_SINK.set(Box::new(sink));
+}
+
+impl RepaintHandle {
+    fn fresh() -> Self {
+        RepaintHandle {
+            id: NEXT_REPAINT_ID.fetch_add(1, Ordering::Relaxed),
+        }
+    }
+
+    /// "The pixels behind my element changed in place — redraw it."
+    /// Paint-only: the element draws its current source at its current
+    /// box, no render, no layout.
+    pub fn repaint(self) {
+        self.send(false);
+    }
+
+    /// "State my element renders may have changed — run the loop."
+    /// Re-render + patch; layout only moves if reconcile says it must.
+    pub fn rerender(self) {
+        self.send(true);
+    }
+
+    fn send(self, rerender: bool) {
+        if let Some(sink) = REPAINT_SINK.get() {
+            sink(self.id, rerender);
+        }
+        // no sink yet (before Application::run, or a bare unit test):
+        // dropped — a repaint request is a hint, never a requirement
+    }
+}
+
 pub struct Ctx<'a> {
     pub state: &'a State,
 }
@@ -233,11 +302,47 @@ impl Ctx<'_> {
             state.update(&key, |v| updater(v))
         }))
     }
+
+    /// use_repaint: the invalidation hook — returns the handle for this
+    /// key, minting it on first use (see State::use_repaint).
+    pub fn use_repaint(&self, key: &str) -> RepaintHandle {
+        self.state.use_repaint(key)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    thread_local! {
+        static SINK_LOG: RefCell<Vec<(usize, bool)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    #[test]
+    fn repaint_handle_is_stable_per_key_and_reaches_the_sink() {
+        install_repaint_sink(|id, rerender| {
+            SINK_LOG.with(|log| log.borrow_mut().push((id, rerender)))
+        });
+
+        let state = State::default();
+        let a = state.use_repaint("anim");
+        assert_eq!(a, state.use_repaint("anim"), "same key, same handle");
+        assert_ne!(
+            a,
+            state.use_repaint("other"),
+            "distinct keys, distinct handles"
+        );
+        assert_ne!(a.id, 0, "0 stays reserved for the win32 HMENU sentinel");
+
+        SINK_LOG.with(|log| log.borrow_mut().clear());
+        a.repaint();
+        a.rerender();
+        assert_eq!(
+            SINK_LOG.with(|log| log.borrow().clone()),
+            vec![(a.id, false), (a.id, true)],
+            "repaint = paint-only, rerender = the render loop"
+        );
+    }
 
     #[test]
     fn handlers_register_refresh_fire() {

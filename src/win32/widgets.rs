@@ -71,6 +71,18 @@ pub enum Widget {
 /// Which neutral widget flavor is this — the platform half of the
 /// compatibility table (the table itself lives in `reconcile`).
 impl Widget {
+    /// The widget's window handle — the target for repaint() requests.
+    pub fn hwnd(&self) -> HWND {
+        match self {
+            Widget::Container { hwnd, .. }
+            | Widget::Label { hwnd }
+            | Widget::Button { hwnd, .. }
+            | Widget::Input { hwnd, .. }
+            | Widget::List { hwnd, .. }
+            | Widget::Image { hwnd, .. } => *hwnd,
+        }
+    }
+
     pub fn kind(&self) -> WidgetKind {
         match self {
             Widget::Container { .. } => WidgetKind::Container,

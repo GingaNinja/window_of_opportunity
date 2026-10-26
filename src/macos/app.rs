@@ -146,6 +146,15 @@ impl Application {
         root: Box<dyn Component>,
         on_app_message: impl Fn(&State, M) + 'static,
     ) {
+        // RepaintHandle requests land on the typed queue (M is nameable
+        // here, which is why the sink installs HERE and not in state)
+        crate::state::install_repaint_sink(|id, rerender| {
+            if rerender {
+                App::<ReactApp<M>, Message<M>>::dispatch_main(Message::Rerender(id));
+            } else {
+                App::<ReactApp<M>, Message<M>>::dispatch_main(Message::Repaint(id));
+            }
+        });
         #[cfg(target_os = "macos")]
         App::new("com.hello.world", ReactApp::<M>::new(root, on_app_message)).run();
     }
@@ -1121,6 +1130,13 @@ impl<M: Send + Sync + 'static> Dispatcher for ReactApp<M> {
                     app.render();
                 }
                 self.state.borrow().reload_lists();
+            }
+            // RepaintHandle requests: the whole-tree render is the safe
+            // shared path for now — TODO: Repaint could skip straight to
+            // the bound view and just setNeedsDisplay
+            Message::Repaint(id) | Message::Rerender(id) => {
+                let _ = id;
+                self.state.borrow_mut().render();
             }
         }
     }
