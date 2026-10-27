@@ -29,6 +29,10 @@ pub enum Widget {
         /// the background brush, if the element asked for one — `None`
         /// means "inherit the parent's", like a transparent NSView
         background: Option<HBRUSH>,
+        /// the div's own on_resize handler — the widget-field pattern
+        /// (patch keeps it current, like Button's on_click), fired from
+        /// the main wndproc when the div posts WM_DIV_RESIZED
+        on_resize: Option<crate::state::Handler>,
         children: Vec<Widget>,
     },
     Button {
@@ -65,6 +69,9 @@ pub enum Widget {
     Image {
         hwnd: HWND,
         background: Option<HBRUSH>,
+        /// the Image's own on_resize — the natural hook for resizing its
+        /// blitframe to the box (same widget-field pattern as Container)
+        on_resize: Option<crate::state::Handler>,
     },
 }
 
@@ -119,7 +126,9 @@ impl Drop for Widget {
                     let _ = DeleteObject((*brush).into());
                 }
             },
-            Widget::Image { hwnd, background } => unsafe {
+            Widget::Image {
+                hwnd, background, ..
+            } => unsafe {
                 if GetParent(*hwnd).is_ok() {
                     let _ = DestroyWindow(*hwnd);
                 }

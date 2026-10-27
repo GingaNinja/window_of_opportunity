@@ -72,6 +72,13 @@ const WM_APP_MSG: u32 = WM_APP + 2;
 /// handle id, lparam = 0 for repaint, 1 for rerender) — WM_APP + 3 is
 /// taken by WM_GET_BG_BRUSH.
 const WM_APP_REPAINT: u32 = WM_APP + 4;
+
+/// A child div resized — POSTED from divproc, not sent: child divs only
+/// resize from our own arrange() mid-render, and a synchronous message
+/// would arrive while the render borrow is held and be dropped. Posting
+/// lands it right after the pass — "effects after commit" timing.
+/// wParam = the div's hwnd, lParam = its new client size (WM_SIZE packing).
+pub const WM_DIV_RESIZED: u32 = WM_APP + 5;
 /// "what brush do you paint with?" — asked by undecorated divs that
 /// inherit their parent's backdrop (the transparent-NSView behavior)
 pub const WM_GET_BG_BRUSH: u32 = WM_APP + 3;
@@ -501,6 +508,7 @@ impl AppState {
             ElementType::Window => Widget::Container {
                 hwnd: parent,
                 background: None,
+                on_resize: container_resize_handler(el),
                 children: el
                     .children
                     .iter()
@@ -513,9 +521,11 @@ impl AppState {
                 // children's controls live inside it
                 let background = el.props.get_string(PropType::Background).map(color_brush);
                 let hwnd = create_div(parent, background, None);
+
                 Widget::Container {
                     hwnd,
                     background,
+                    on_resize: container_resize_handler(el),
                     children: el
                         .children
                         .iter()
@@ -597,11 +607,17 @@ impl AppState {
             ElementType::Image => {
                 // a Div is a real child window — the win32 analogue of the
                 // cacao view: it paints its own background and its
-                // children's controls live inside it
+                // children's controls live inside it. Image divs answer
+                // on_resize too — the natural hook for resizing the
+                // blitframe to the box.
                 let background = el.props.get_string(PropType::Background).map(color_brush);
                 let image_source = el.props.get_source(PropType::Source);
                 let hwnd = create_div(parent, background, image_source);
-                Widget::Image { hwnd, background }
+                Widget::Image {
+                    hwnd,
+                    background,
+                    on_resize: container_resize_handler(el),
+                }
             }
             ElementType::Component(_) => {
                 unreachable!("component elements are expanded before mounting")
@@ -794,9 +810,17 @@ impl AppState {
     }
 
     fn patch_image(&self, widget: &mut Widget, old_el: &Element, new_el: &Element) {
-        let Widget::Image { hwnd, background } = widget else {
+        let Widget::Image {
+            hwnd,
+            background,
+            on_resize,
+        } = widget
+        else {
             unreachable!("patch_image called on a non-image")
         };
+
+        // keep the on_resize handler current (same rule as containers)
+        *on_resize = container_resize_handler(new_el);
 
         // Reconcile the source: compare cheap identity (frames are
         // Arc-shared and versioned) — never Prop PartialEq, which walks
@@ -840,11 +864,17 @@ impl AppState {
         let Widget::Container {
             hwnd,
             background,
+            on_resize,
             children,
         } = widget
         else {
             unreachable!("patch_container called on a non-container")
         };
+
+        // keep the div's on_resize handler current (the widget-field
+        // pattern: a write keeps it fresh; stale copies are harmless —
+        // they address state slots by key)
+        *on_resize = container_resize_handler(new_el);
 
         // Reconcile the background prop (visual only) — the cacao twin of
         // this block sets the NSView's color. The root window is skipped:
@@ -926,12 +956,43 @@ fn click_and_render(app: &RefCell<AppState>, button: HWND) {
     }
 }
 
+/// The element's on_resize handler in the shape the widget holds it
+/// (anything else under the prop name is ignored — resize is resize).
+fn container_resize_handler(el: &Element) -> Option<Handler> {
+    match el.handlers.get("on_resize") {
+        Some(handler @ Handler::Resize(_)) => Some(handler.clone()),
+        _ => None,
+    }
+}
+
 fn find_button_handler(widget: &mut Widget, hwnd: HWND) -> Option<Event> {
     match widget {
         Widget::Button { hwnd: h, on_click } if *h == hwnd => on_click.clone(),
         Widget::Container { children, .. } => children
             .iter_mut()
             .find_map(|child| find_button_handler(child, hwnd)),
+        _ => None,
+    }
+}
+
+/// The element's on_resize handler — the same find-by-hwnd walk as
+/// buttons, for WM_DIV_RESIZED. Both containers (Div) and Images answer:
+/// Images want it to resize their blitframe to the box.
+fn find_resize_handler(widget: &mut Widget, hwnd: HWND) -> Option<Handler> {
+    match widget {
+        Widget::Container {
+            hwnd: h,
+            on_resize,
+            ..
+        }
+        | Widget::Image {
+            hwnd: h,
+            on_resize,
+            ..
+        } if *h == hwnd => on_resize.clone(),
+        Widget::Container { children, .. } => children
+            .iter_mut()
+            .find_map(|child| find_resize_handler(child, hwnd)),
         _ => None,
     }
 }
@@ -1018,6 +1079,29 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         app.render();
                     } else if let Some(hwnd) = app.repaint_targets.borrow().get(&id) {
                         let _ = InvalidateRect(Some(*hwnd), None, false);
+                    }
+                }
+                return LRESULT(0);
+            }
+            WM_DIV_RESIZED => {
+                // a child div resized: wparam = the div's hwnd, lparam = its
+                // new client size. Fire its on_resize like the root's WM_SIZE
+                // does — same logical units (physical → 96-dpi) — then render.
+                let div = HWND(wparam.0 as *mut _);
+                let (w, h) = (
+                    (lparam.0 & 0xffff) as f64,
+                    ((lparam.0 >> 16) & 0xffff) as f64,
+                );
+                if let Ok(mut app) = app.try_borrow_mut() {
+                    let dpi = text_ctx().dpi as f64;
+                    let (w, h) = (w * 96_f64 / dpi, h * 96_f64 / dpi);
+                    let handler = app
+                        .root_widget
+                        .as_mut()
+                        .and_then(|root| find_resize_handler(root, div));
+                    if let Some(Handler::Resize(f)) = handler {
+                        f(&app.state, w, h);
+                        app.render();
                     }
                 }
                 return LRESULT(0);

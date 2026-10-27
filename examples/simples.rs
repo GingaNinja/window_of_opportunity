@@ -117,6 +117,7 @@ impl Component for Imaging {
         // Image binds the same handle to that element, so handle.repaint()
         // redraws JUST it (no render) and handle.rerender() runs the loop.
         let repaint = ctx.use_repaint("anim");
+        let (w, h) = ctx.use_state("image/size", || (640., 820.));
         ctx.use_state("ticker", || {
             std::thread::spawn(move || {
                 loop {
@@ -129,7 +130,8 @@ impl Component for Imaging {
         let offset = start.elapsed().as_millis() / 5;
         let img = gradient_frame(offset as usize);
 
-        ui! { Image source(frame(img)) repaint(repaint) grow(true) {} }
+        ui! { Image on_resize(|state, w, h|
+        println!("new image size of {w} x {h}")) source(frame(img)) repaint(repaint) grow(true) {} }
     }
 }
 
@@ -144,6 +146,10 @@ impl Component for Window {
     ) -> Box<window_of_opportunity::element::Element> {
         let (w, h) = ctx.use_state("window/size", || (640., 820.));
         let first = ctx.use_state("first", || true);
+        // per-div resize handling: the black div's on_resize reports its
+        // own box (logical units, like the window's on_resize), and its
+        // Text renders it back — resize the window to watch it track.
+        let (div_w, div_h) = ctx.use_state("black/size", || (0., 0.));
 
         let title = if first {
             "One message"
@@ -157,7 +163,12 @@ impl Component for Window {
                        state.update("window/size", |s: &mut (f64, f64)| *s = (w, h))) {
                 { Div direction("column") gap(10.) grow(true) padding(10., 20., 30., 40.)  { // note, we have t, r, b, l padding
                     { Pane }
-                    { Div height(80.) background("black") {} }
+                    { Div height(80.)
+                          on_resize(|state, w, h|
+                              state.update("black/size", |s: &mut (f64, f64)| *s = (w, h))) {
+                        // (no background here: win32 Labels don't honor a
+                        // color prop yet, so black-on-black would vanish)
+                        { Text format!("div sees its own size: {:.0} x {:.0}", div_w, div_h) } } }
                     { Div direction("row") gap(10.) height(60.) {
                         { Button { Text "Hello, and this should mean a bigger button" } }
                         { Button { Text "Two" } }

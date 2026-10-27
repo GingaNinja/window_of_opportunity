@@ -14,7 +14,10 @@ use windows::{
 
 use crate::{element::ImageSource, win32::dc};
 
-use super::{app::WM_GET_BG_BRUSH, util::load_cursor};
+use super::{
+    app::{WM_DIV_RESIZED, WM_GET_BG_BRUSH},
+    util::load_cursor,
+};
 
 const DIV_CLASS: PCWSTR = w!("wo_div");
 
@@ -205,6 +208,27 @@ unsafe extern "system" fn divproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     }
                 }
             }
+            // WM_SIZE => {
+            //     // the WindowProxy.did_resize role: user resizes flow through
+            //     // component logic (on_resize), then the tree follows. lparam
+            //     // carries the new client size (loword = width, hiword = height)
+            //     if let Ok(mut app) = app.try_borrow_mut() {
+            //         let (w, h) = (
+            //             (lparam.0 & 0xffff) as f64,
+            //             ((lparam.0 >> 16) & 0xffff) as f64,
+            //         );
+
+            //         let dpi = text_ctx().dpi as f64;
+            //         let w = w * 96_f64 / dpi;
+            //         let h = h * 96_f64 / dpi;
+
+            //         if let Some(Handler::Resize(f)) = app.handlers.resize_handler() {
+            //             f(&app.state, w, h);
+            //         }
+            //         app.render();
+            //     }
+            //     return LRESULT(0);
+            // }
             WM_NOTIFY => {
                 // notifications bubble too — and custom draw's return value
                 // must propagate with them
@@ -239,6 +263,17 @@ unsafe extern "system" fn divproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     // painted ourselves — don't let DefWindowProc do a
                     // second BeginPaint/EndPaint pass over it
                     return LRESULT(0);
+                }
+            }
+            WM_SIZE => {
+                // tell the root this div resized — POSTED, because child
+                // divs resize from our own arrange() mid-render, and a
+                // synchronous send would land while the render borrow is
+                // held. wParam = our hwnd, lParam = the new client size.
+                let root = GetAncestor(hwnd, GET_ANCESTOR_FLAGS(2)); // GA_ROOT
+                if !root.0.is_null() {
+                    let _ =
+                        PostMessageW(Some(root), WM_DIV_RESIZED, WPARAM(hwnd.0 as usize), lparam);
                 }
             }
             WM_NCDESTROY => {
