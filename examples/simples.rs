@@ -108,7 +108,7 @@ impl Component for Imaging {
         _children: Vec<Box<window_of_opportunity::element::Element>>,
     ) -> Box<window_of_opportunity::element::Element> {
         // --- the RepaintHandle in action -------------------------------
-        // A ticker thread says "hey, re-render" five times a second, and
+        // A ticker thread says "hey, re-render" thirty times a second, and
         // this render simply SAMPLES THE CLOCK for the gradient — the
         // content is derived at render time, the handle is only the
         // invalidation signal. That's the whole idea: whatever changed
@@ -120,16 +120,14 @@ impl Component for Imaging {
         ctx.use_state("ticker", || {
             std::thread::spawn(move || {
                 loop {
-                    std::thread::sleep(std::time::Duration::from_millis(25));
+                    std::thread::sleep(std::time::Duration::from_millis(1000 / 30));
                     repaint.rerender();
                 }
             });
         });
-        let phase = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| (d.as_millis() as f64 / 25.) as i128)
-            .unwrap_or(0) as usize;
-        let img = gradient_frame(phase);
+        let start = ctx.use_state("start", std::time::Instant::now);
+        let offset = start.elapsed().as_millis() / 5;
+        let img = gradient_frame(offset as usize);
 
         ui! { Image source(frame(img)) repaint(repaint) grow(true) {} }
     }
@@ -174,22 +172,22 @@ impl Component for Window {
     }
 }
 
-/// A gradient that shifts with `phase` — derived at render time like any
-/// good React output. `version` ticks with the phase so the image widget
+/// A gradient that shifts with `offset` — derived at render time like any
+/// good React output. `version` ticks with the offset so the image widget
 /// can tell frames apart (and skip re-blitting unchanged ones).
-fn gradient_frame(phase: usize) -> BlitFrame {
+fn gradient_frame(offset: usize) -> BlitFrame {
     let (width, height) = (600, 400);
     let mut pixels = vec![Pixel(0); width * height];
     for y in 0..height {
         for x in 0..width {
-            let b = ((x + phase * 17) & 0xff) as u32;
+            let b = ((x + offset) & 0xff) as u32;
             let g = (y & 0xff) as u32;
             pixels[y * width + x] = Pixel(0xFF00_0000 | (g << 8) | b);
         }
     }
     let mut frame = BlitFrame::new(width, height);
     frame.pixels = Arc::new(pixels);
-    frame.version = phase as u64;
+    frame.version = offset as u64;
     frame
 }
 
