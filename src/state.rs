@@ -9,8 +9,8 @@ use std::{
     fmt::{self, Debug},
     rc::Rc,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         OnceLock,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 

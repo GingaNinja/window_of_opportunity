@@ -229,16 +229,16 @@ unsafe extern "system" fn divproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 return LRESULT(background_brush(hwnd).0 as isize);
             }
             WM_PAINT => {
-                if let Some(div_info) = div_state(hwnd) {
-                    if div_info.source.borrow().is_some() {
-                        let dc = dc::DeviceContext::begin_paint(hwnd);
-                        let mut client_rect = RECT::default();
-                        let _ = GetClientRect(hwnd, &mut client_rect);
-                        div_info.paint_image(dc.hdc, &client_rect);
-                        // painted ourselves — don't let DefWindowProc do a
-                        // second BeginPaint/EndPaint pass over it
-                        return LRESULT(0);
-                    }
+                if let Some(div_info) = div_state(hwnd)
+                    && div_info.source.borrow().is_some()
+                {
+                    let dc = dc::DeviceContext::begin_paint(hwnd);
+                    let mut client_rect = RECT::default();
+                    let _ = GetClientRect(hwnd, &mut client_rect);
+                    div_info.paint_image(dc.hdc, &client_rect);
+                    // painted ourselves — don't let DefWindowProc do a
+                    // second BeginPaint/EndPaint pass over it
+                    return LRESULT(0);
                 }
             }
             WM_NCDESTROY => {
