@@ -981,14 +981,10 @@ fn find_button_handler(widget: &mut Widget, hwnd: HWND) -> Option<Event> {
 fn find_resize_handler(widget: &mut Widget, hwnd: HWND) -> Option<Handler> {
     match widget {
         Widget::Container {
-            hwnd: h,
-            on_resize,
-            ..
+            hwnd: h, on_resize, ..
         }
         | Widget::Image {
-            hwnd: h,
-            on_resize,
-            ..
+            hwnd: h, on_resize, ..
         } if *h == hwnd => on_resize.clone(),
         Widget::Container { children, .. } => children
             .iter_mut()
@@ -1071,36 +1067,67 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 return LRESULT(0);
             }
             WM_APP_REPAINT => {
-                // the RepaintHandle fast lane — from any thread, no payload
-                let id = wparam.0;
-                let rerender = lparam.0 != 0;
+                // the RepaintHandle fast lane — from any thread, no payload.
+                // BATCH: a 30fps ticker queues requests faster than big
+                // renders drain them, and input starves behind the backlog
+                // (visible in debug builds: ~100% CPU, clicks minutes late).
+                // Drain the burst and do each kind of work ONCE.
+                let mut rerender = lparam.0 != 0;
+                let mut ids = vec![wparam.0];
+                let mut msg = MSG::default();
+                while PeekMessageW(&mut msg, None, WM_APP_REPAINT, WM_APP_REPAINT, PM_REMOVE)
+                    .as_bool()
+                {
+                    rerender |= msg.lParam.0 != 0;
+                    ids.push(msg.wParam.0);
+                }
                 if let Ok(mut app) = app.try_borrow_mut() {
                     if rerender {
                         app.render();
-                    } else if let Some(hwnd) = app.repaint_targets.borrow().get(&id) {
-                        let _ = InvalidateRect(Some(*hwnd), None, false);
+                    }
+                    // paint-only requests are not subsumed by a render:
+                    // an unchanged element still needs its invalidate
+                    let targets = app.repaint_targets.borrow();
+                    for id in ids {
+                        if let Some(hwnd) = targets.get(&id) {
+                            let _ = InvalidateRect(Some(*hwnd), None, false);
+                        }
                     }
                 }
                 return LRESULT(0);
             }
             WM_DIV_RESIZED => {
-                // a child div resized: wparam = the div's hwnd, lparam = its
-                // new client size. Fire its on_resize like the root's WM_SIZE
-                // does — same logical units (physical → 96-dpi) — then render.
-                let div = HWND(wparam.0 as *mut _);
-                let (w, h) = (
-                    (lparam.0 & 0xffff) as f64,
-                    ((lparam.0 >> 16) & 0xffff) as f64,
-                );
+                // child divs resized: wparam = the div's hwnd, lparam = its
+                // new client size. Fire their on_resize like the root's
+                // WM_SIZE does — same logical units (physical → 96-dpi) —
+                // and BATCH: one render for the whole burst, not one per
+                // div (arrange moves every child at once, and N renders per
+                // pass multiplies any layout churn N-fold).
+                let mut events = vec![(HWND(wparam.0 as *mut _), lparam)];
+                let mut msg = MSG::default();
+                while PeekMessageW(&mut msg, None, WM_DIV_RESIZED, WM_DIV_RESIZED, PM_REMOVE)
+                    .as_bool()
+                {
+                    events.push((HWND(msg.wParam.0 as *mut _), msg.lParam));
+                }
                 if let Ok(mut app) = app.try_borrow_mut() {
                     let dpi = text_ctx().dpi as f64;
-                    let (w, h) = (w * 96_f64 / dpi, h * 96_f64 / dpi);
-                    let handler = app
-                        .root_widget
-                        .as_mut()
-                        .and_then(|root| find_resize_handler(root, div));
-                    if let Some(Handler::Resize(f)) = handler {
-                        f(&app.state, w, h);
+                    let mut fired = false;
+                    for (div, size) in events {
+                        let (w, h) = (
+                            (size.0 & 0xffff) as f64 * 96_f64 / dpi,
+                            (size.0 >> 16) as f64 * 96_f64 / dpi,
+                        );
+                        let handler = app
+                            .root_widget
+                            .as_mut()
+                            .and_then(|root| find_resize_handler(root, div));
+                        if let Some(Handler::Resize(f)) = handler {
+                            f(&app.state, w, h);
+                            fired = true;
+                        }
+                    }
+                    if fired {
                         app.render();
                     }
                 }

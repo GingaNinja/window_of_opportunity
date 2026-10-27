@@ -128,10 +128,17 @@ impl Component for Imaging {
         });
         let start = ctx.use_state("start", std::time::Instant::now);
         let offset = start.elapsed().as_millis() / 5;
-        let img = gradient_frame(offset as usize);
+        // The frame follows the box — but at QUARTER resolution, stretched
+        // back to full size by the blit. Per-render pixel generation is
+        // O(area): generating box-sized frames every tick saturates the UI
+        // thread as the window grows (maximize on a 5K display made the
+        // app stop responding to input in debug builds). Fit modes + a
+        // cached scaled bitmap are the real answer; quarter-res keeps the
+        // box-following demo honest and affordable.
+        let img = gradient_frame(offset as usize, (w / 4.) as usize, (h / 4.) as usize);
 
         ui! { Image on_resize(|state, w, h|
-        println!("new image size of {w} x {h}")) source(frame(img)) repaint(repaint) grow(true) {} }
+        state.update("image/size", |d|  *d = (w, h))) source(frame(img)) repaint(repaint) grow(true) {} }
     }
 }
 
@@ -186,8 +193,7 @@ impl Component for Window {
 /// A gradient that shifts with `offset` — derived at render time like any
 /// good React output. `version` ticks with the offset so the image widget
 /// can tell frames apart (and skip re-blitting unchanged ones).
-fn gradient_frame(offset: usize) -> BlitFrame {
-    let (width, height) = (600, 400);
+fn gradient_frame(offset: usize, width: usize, height: usize) -> BlitFrame {
     let mut pixels = vec![Pixel(0); width * height];
     for y in 0..height {
         for x in 0..width {
