@@ -13,10 +13,11 @@ context isn't lost.
 
 - [ ] **Fit modes + the scaled-bitmap cache**
   `fit(stretch | contain | cover | center | tile)` and
-  `filter(smooth | pixelated)` props. Scale ONCE per
-  `(frame gen, box size, fit, filter)` into a cached DIBSection; blit 1:1
-  per paint. During a live resize, stretch the cache and re-scale on
-  `WM_EXITSIZEMOVE`. macOS scales natively via AppKit.
+  `filter(smooth | pixelated)` props. (Correctness-first core landed:
+  software scale once per `(frame, box)` + 1:1 blit — GDI's own stretch
+  mangles sources over ~4096px wide, probe-verified. Remaining: quality
+  filter choice, per-fit mapping, and the stretch-during-resize trick.)
+  macOS scales natively via AppKit.
 
 - [ ] **Decoder strategy — the open decision**
   Three options on the table:
