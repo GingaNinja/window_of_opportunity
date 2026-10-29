@@ -1,18 +1,33 @@
-use std::{cell::RefCell, mem, rc::Rc, sync::Arc};
+use std::{cell::RefCell, mem, rc::Rc};
 use windows::{
     Win32::{
         Foundation::*,
-        Graphics::Gdi::{
-            BI_RGB, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, FillRect, HBRUSH, HDC,
-            InvalidateRect, SRCCOPY, SetBkMode, StretchDIBits, TRANSPARENT,
+        Graphics::{
+            Direct2D::{
+                D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1CreateFactory,
+                ID2D1Factory,
+            },
+            Gdi::{
+                BI_RGB, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, FillRect, HBRUSH, HDC,
+                InvalidateRect, SRCCOPY, SetBkMode, StretchDIBits, TRANSPARENT,
+            },
+            Imaging::{
+                CLSID_WICImagingFactory, IWICImagingFactory, WICDecodeMetadataCacheOnDemand,
+            },
         },
-        System::LibraryLoader::GetModuleHandleW,
+        System::{
+            Com::{CLSCTX_INPROC_SERVER, CoCreateInstance},
+            LibraryLoader::GetModuleHandleW,
+        },
         UI::WindowsAndMessaging::*,
     },
     core::*,
 };
 
-use crate::{element::ImageSource, win32::dc};
+use crate::{
+    element::{ImageSource, Pixel},
+    win32::dc,
+};
 
 use super::{
     app::{WM_DIV_RESIZED, WM_GET_BG_BRUSH},
@@ -32,6 +47,11 @@ struct Div {
     /// `set_image_source`, and painting always reads the CURRENT source —
     /// so frames generated after mount show up.
     source: RefCell<Option<ImageSource>>,
+    /// display-scale memo: ((frame pixels ptr, box w, box h), scaled copy).
+    /// GDI's stretch mangles large sources (probe-verified), so scaling
+    /// happens here once per (frame, box) and the blit is 1:1 — exact at
+    /// any size. The full fit-mode + quality-scale cache is on the TODO.
+    scaled: RefCell<Option<((usize, usize, usize), Vec<Pixel>)>>,
 }
 
 /// A Div's child window — the Div state rides along as lpParam (freed in
@@ -45,7 +65,9 @@ pub fn create_div(
     let div_info = Rc::new(Div {
         background: RefCell::new(background),
         source: RefCell::new(image_source.cloned()),
+        scaled: RefCell::new(None),
     });
+    try_wic();
     let div_info_ptr = Box::into_raw(Box::new(div_info));
     unsafe {
         CreateWindowExW(
@@ -63,6 +85,30 @@ pub fn create_div(
             Some(div_info_ptr as *const _ as _),
         )
         .expect("CreateWindowExW div")
+    }
+}
+
+fn try_wic() {
+    unsafe {
+        let wic_imaging_factory: IWICImagingFactory =
+            CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).unwrap();
+
+        let decoder = wic_imaging_factory
+            .CreateDecoderFromFilename(
+                w!("ronda.jpg"),
+                None,
+                GENERIC_READ,
+                WICDecodeMetadataCacheOnDemand,
+            )
+            .unwrap();
+        let frame = decoder.GetFrame(0).unwrap();
+        let mut width = 0;
+        let mut height = 0;
+        frame.GetSize(&mut width, &mut height).unwrap();
+        println!("width: {width}, height: {height}");
+        let d2d_options = D2D1_FACTORY_OPTIONS::default();
+        let _d2dFactory: ID2D1Factory =
+            D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, Some(&d2d_options)).unwrap();
     }
 }
 
@@ -156,15 +202,34 @@ impl Div {
             // path bindings that arrive as ImageSource::File
             return;
         };
-        // let frame: Arc<BlitFrame> = s.into();
         if frame.width == 0 || frame.height == 0 {
             return; // empty frame: leave the erased background showing
         }
 
+        let (dw, dh) = (
+            (window_rect.right - window_rect.left).max(1) as usize,
+            (window_rect.bottom - window_rect.top).max(1) as usize,
+        );
+
+        // GDI's stretch mangles LARGE sources — probe-verified: downsizing
+        // anything over ~4096px wide samples the wrong source pixels
+        // (queensland.jpg came out neon with a seam; ronda.jpg at a 2x
+        // ratio was fine). The reliable pair is: scale in software once per
+        // (frame, box), then blit 1:1 — which is exact at any size.
+        let key = (frame.pixels.as_ptr() as usize, dw, dh);
+        let mut scaled = self.scaled.borrow_mut();
+        if scaled.as_ref().map(|(k, _)| *k) != Some(key) {
+            *scaled = Some((
+                key,
+                scale_bgra(&frame.pixels, frame.width, frame.height, dw, dh),
+            ));
+        }
+        let pixels = &scaled.as_ref().expect("just set").1;
+
         let mut bitmap_info = BITMAPINFO::default();
         bitmap_info.bmiHeader.biSize = mem::size_of::<BITMAPINFOHEADER>() as u32;
-        bitmap_info.bmiHeader.biWidth = frame.width as i32;
-        bitmap_info.bmiHeader.biHeight = -(frame.height as i32); // top-down scanlines
+        bitmap_info.bmiHeader.biWidth = dw as i32;
+        bitmap_info.bmiHeader.biHeight = -(dh as i32); // top-down scanlines
         bitmap_info.bmiHeader.biPlanes = 1;
         bitmap_info.bmiHeader.biBitCount = 32;
         bitmap_info.bmiHeader.biCompression = BI_RGB.0;
@@ -174,19 +239,50 @@ impl Div {
                 hdc,
                 0,
                 0,
-                window_rect.right - window_rect.left,
-                window_rect.bottom - window_rect.top,
+                dw as i32,
+                dh as i32,
                 0,
                 0,
-                frame.width as i32,
-                frame.height as i32,
-                Some(frame.pixels.as_ptr() as *const _),
+                dw as i32,
+                dh as i32,
+                Some(pixels.as_ptr() as *const _),
                 &bitmap_info,
                 DIB_RGB_COLORS,
                 SRCCOPY,
             );
         }
     }
+}
+
+/// Scale premultiplied BGRA pixels to the box — box-average down (good
+/// quality, one pass), nearest up (the `.max(x0 + 1)` spans collapse to one
+/// pixel). Channel-agnostic: each byte lane is averaged on its own, so the
+/// premultiplied contract survives untouched.
+fn scale_bgra(src: &[Pixel], w: usize, h: usize, dw: usize, dh: usize) -> Vec<Pixel> {
+    let mut out = vec![Pixel(0); dw * dh];
+    for dy in 0..dh {
+        let y0 = dy * h / dh;
+        let y1 = ((dy + 1) * h / dh).max(y0 + 1).min(h);
+        for dx in 0..dw {
+            let x0 = dx * w / dw;
+            let x1 = ((dx + 1) * w / dw).max(x0 + 1).min(w);
+            let (mut a, mut r, mut g, mut b, mut n) = (0u64, 0u64, 0u64, 0u64, 0u64);
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let p = src[y * w + x].0 as u64;
+                    a += p >> 24;
+                    r += (p >> 16) & 0xff;
+                    g += (p >> 8) & 0xff;
+                    b += p & 0xff;
+                    n += 1;
+                }
+            }
+            out[dy * dw + dx] = Pixel(
+                (((a / n) << 24) | ((r / n) << 16) | ((g / n) << 8) | (b / n)) as u32,
+            );
+        }
+    }
+    out
 }
 
 /// The `wo_div` class proc: a Div paints its own background and lends its
