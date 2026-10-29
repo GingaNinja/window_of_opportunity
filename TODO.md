@@ -21,16 +21,23 @@ context isn't lost.
 - [ ] **Decoder strategy — the open decision**
   Three options on the table:
   1. *Native decoders*: WIC (win32) + ImageIO/CoreGraphics (macOS) — zero
-     binary cost (system DLLs), system codecs, better error surfaces;
+     binary cost (system DLLs), system codecs, better error surfaces,
+     and **colour management for free** (embedded ICC profiles are
+     applied; the `image` crate ignores them, which is how a Display-P3
+     JPEG ended up with wrong colours in simples);
      two code paths to maintain.
   2. *`image` crate* (current) — one shared decode path for both backends,
      every format, feature-forwarded to downstream apps; costs binary
-     size (measured: png ≈ 125KB) and brings the panicking load API.
+     size (measured: png ≈ 125KB), brings the panicking load API, and
+     needs a CMS bolted on (qcms/lcms2) for correct colours.
   3. *Decoder-free library + userspace helpers* — keep the library at
      `BlitFrame` only; ship `load_image_file`-style helpers as documented
-     recipes (or a companion module), apps decode however they like.
+     recipes (or a companion module), apps decode however they like
+     (colour management becomes the app's problem, for better or worse).
   Whichever wins: `load_image_file` should grow a `Result`-based sibling —
-  today a missing/corrupt file panics with a named path.
+  today a missing/corrupt file panics with a named path. And colour
+  management needs an answer in every option (see the profile note above) —
+  at minimum, detect non-sRGB ICC profiles and warn.
 
 - [ ] **In-place frame mutation** (the `repaint()` fast lane)
   A `BlitFrame` write API (shared buffer + `version` bump) so
