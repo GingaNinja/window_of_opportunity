@@ -15,6 +15,9 @@ cacao = "0.3.2"
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
+    "Win32_Graphics_Imaging",
+    "Win32_Graphics_Direct2D",
+    "Win32_System_Com",
     "Win32_System_LibraryLoader",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_HiDpi",
@@ -43,7 +46,31 @@ embed-resource = "3.0.12"
 
 
 [features]
+default = ["image-png", "image-jpeg"]
 debug_dump = []
 
+# Image decode formats — forwarded to the `image` crate so every app pays
+# only for what it loads:
+#   window_of_opportunity = { default-features = false, features = ["image-webp"] }
+# `image-formats` turns on everything the image crate supports (its own
+# default-formats set). See also `image-rayon` for parallel decode.
+image-formats = ["image/default-formats"]
+image-png = ["image/png"]
+image-jpeg = ["image/jpeg"]
+image-gif = ["image/gif"]
+image-bmp = ["image/bmp"]
+image-ico = ["image/ico"]
+image-tiff = ["image/tiff"]
+image-webp = ["image/webp"]
+image-tga = ["image/tga"]
+image-hdr = ["image/hdr"]
+image-dds = ["image/dds"]
+image-pnm = ["image/pnm"]
+image-qoi = ["image/qoi"]
+image-farbfeld = ["image/ff"]
+image-exr = ["image/exr"]
+image-avif = ["image/avif"]
+image-rayon = ["image/rayon"]
+
 [dependencies]
-image = "0.25.10"
+image = { version = "0.25.10", default-features = false }

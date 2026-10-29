@@ -731,12 +731,7 @@ impl From<Rgba<u8>> for Pixel {
     fn from(value: Rgba<u8>) -> Self {
         let [r, g, b, a] = value.0;
         let mul = |c: u8| ((c as u32 * a as u32 + 127) / 255) as u8;
-        Self(
-            ((a as u32) << 24)
-                | ((mul(r) as u32) << 16)
-                | ((mul(g) as u32) << 8)
-                | mul(b) as u32,
-        )
+        Self(((a as u32) << 24) | ((mul(r) as u32) << 16) | ((mul(g) as u32) << 8) | mul(b) as u32)
     }
 }
 
@@ -872,20 +867,28 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "image-png")]
     #[test]
-    fn image_source_sugar_forms_lower_to_the_enum() {
-        // file(...) decodes a REAL file (memoised by path) into a frame
+    fn image_file_sugar_decodes_to_a_frame() {
+        // file(...) decodes a REAL file (memoised by path) into a frame —
+        // needs an encoder to build the fixture, hence the gate
         let path = std::env::temp_dir().join("wo_sugar_forms.png");
         image::RgbaImage::from_pixel(2, 1, Rgba([1, 2, 3, 255]))
             .save(&path)
             .unwrap();
         let el = crate::ui! { Image source(file(path.to_str().unwrap())) };
         assert!(
-            matches!(el.props.get_source(PropType::Source), Some(ImageSource::Frame(_))),
+            matches!(
+                el.props.get_source(PropType::Source),
+                Some(ImageSource::Frame(_))
+            ),
             "file(...) must land as a decoded ImageSource::Frame: {:?}",
             el.props.get_source(PropType::Source)
         );
+    }
 
+    #[test]
+    fn image_source_sugar_forms_lower_to_the_enum() {
         // frame(...) — owned, borrowed, or Arc'd (the clone is cheap:
         // pixels are Arc-shared)
         let frame = BlitFrame::empty();
@@ -962,6 +965,9 @@ mod tests {
         );
     }
 
+    // (file-loading tests need an ENCODER to build their fixtures —
+    // gated on image-png so slim feature builds still test the rest)
+    #[cfg(feature = "image-png")]
     #[test]
     fn image_file_loads_once() {
         // round-trip a real tiny PNG through the loader's cache
