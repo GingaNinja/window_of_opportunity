@@ -24,21 +24,30 @@ context isn't lost.
   1. *Native decoders*: WIC (win32) + ImageIO/CoreGraphics (macOS) — zero
      binary cost (system DLLs), system codecs, better error surfaces,
      and **colour management for free** (embedded ICC profiles are
-     applied; the `image` crate ignores them, which is how a Display-P3
-     JPEG ended up with wrong colours in simples);
-     two code paths to maintain.
+     applied; the `image` crate ignores them — qcms was bolted on as the
+     stopgap); two code paths to maintain.
   2. *`image` crate* (current) — one shared decode path for both backends,
      every format, feature-forwarded to downstream apps; costs binary
      size (measured: png ≈ 125KB), brings the panicking load API, and
-     needs a CMS bolted on (qcms/lcms2) for correct colours.
+     needs the CMS stopgap (qcms — landed).
   3. *Decoder-free library + userspace helpers* — keep the library at
      `BlitFrame` only; ship `load_image_file`-style helpers as documented
      recipes (or a companion module), apps decode however they like
      (colour management becomes the app's problem, for better or worse).
   Whichever wins: `load_image_file` should grow a `Result`-based sibling —
-  today a missing/corrupt file panics with a named path. And colour
-  management needs an answer in every option (see the profile note above) —
-  at minimum, detect non-sRGB ICC profiles and warn.
+  today a missing/corrupt file panics with a named path.
+
+  **Exhibit A for option 1 — the GDI stretch bug**: GDI's stretch mangles
+  sources over ~4096px wide (probe-verified: wrong colours + seams on
+  large photos; worked around by scale-once + 1:1 blit in div.rs).
+  Direct2D's DrawBitmap would not have hit it (float sampling), and D2D
+  collapses three rendering TODOs into one migration: premultiplied BGRA
+  is its native currency (deletes AlphaBlend), interpolation modes are a
+  parameter (deletes the fit/filter quality work), and GPU transforms are
+  the animation future. In practice WIC-decode + D2D-paint is ONE decision
+  that answers this entry and half the Rendering section. Costs: render-
+  target lifecycle (device loss, DPI), a ~16K GPU bitmap ceiling, and the
+  `wo_div` WM_PAINT path moves to BeginDraw/EndDraw.
 
 - [ ] **In-place frame mutation** (the `repaint()` fast lane)
   A `BlitFrame` write API (shared buffer + `version` bump) so
