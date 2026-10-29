@@ -44,3 +44,6 @@ embed-resource = "3.0.12"
 
 [features]
 debug_dump = []
+
+[dependencies]
+image = "0.25.10"

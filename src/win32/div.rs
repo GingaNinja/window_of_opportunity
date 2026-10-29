@@ -1,4 +1,4 @@
-use std::{cell::RefCell, mem, rc::Rc};
+use std::{cell::RefCell, mem, rc::Rc, sync::Arc};
 use windows::{
     Win32::{
         Foundation::*,
@@ -151,9 +151,12 @@ impl Div {
     fn paint_image(&self, hdc: HDC, window_rect: &RECT) {
         let source = self.source.borrow();
         let Some(ImageSource::Frame(frame)) = source.as_ref() else {
-            // File sources: decode (WIC → BlitFrame) isn't wired yet
+            // File sources are decoded + cached into frames by
+            // load_image_file at the macro; this arm is a guard for bare
+            // path bindings that arrive as ImageSource::File
             return;
         };
+        // let frame: Arc<BlitFrame> = s.into();
         if frame.width == 0 || frame.height == 0 {
             return; // empty frame: leave the erased background showing
         }
@@ -208,27 +211,6 @@ unsafe extern "system" fn divproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     }
                 }
             }
-            // WM_SIZE => {
-            //     // the WindowProxy.did_resize role: user resizes flow through
-            //     // component logic (on_resize), then the tree follows. lparam
-            //     // carries the new client size (loword = width, hiword = height)
-            //     if let Ok(mut app) = app.try_borrow_mut() {
-            //         let (w, h) = (
-            //             (lparam.0 & 0xffff) as f64,
-            //             ((lparam.0 >> 16) & 0xffff) as f64,
-            //         );
-
-            //         let dpi = text_ctx().dpi as f64;
-            //         let w = w * 96_f64 / dpi;
-            //         let h = h * 96_f64 / dpi;
-
-            //         if let Some(Handler::Resize(f)) = app.handlers.resize_handler() {
-            //             f(&app.state, w, h);
-            //         }
-            //         app.render();
-            //     }
-            //     return LRESULT(0);
-            // }
             WM_NOTIFY => {
                 // notifications bubble too — and custom draw's return value
                 // must propagate with them

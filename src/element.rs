@@ -1,4 +1,12 @@
-use std::{collections::HashMap, path::PathBuf, rc::Rc, sync::Arc};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    path::{Path, PathBuf},
+    rc::Rc,
+    sync::Arc,
+};
+
+use image::{GenericImageView, Rgba};
 
 use crate::{component::Component, state::Handler};
 
@@ -576,9 +584,7 @@ macro_rules! ui {
     (@prop $el:ident, source(file($val:expr))) => {
         $el.props.insert(
             $crate::element::PropType::Source,
-            $crate::element::Prop::ImageSource($crate::element::ImageSource::File(
-                std::path::PathBuf::from($val),
-            )),
+            $crate::element::Prop::ImageSource($crate::element::load_image_file($val)),
         );
     };
     (@prop $el:ident, source(frame($val:expr))) => {
@@ -712,9 +718,55 @@ macro_rules! ui {
     };
 }
 
-/// 0xAARRGGBB (AA is the optional alpha channel, but used for alignment regardless)
+/// 0xAARRGGBB, PREMULTIPLIED — the bytes in memory are B,G,R,A, exactly
+/// what GDI's AlphaBlend and Quartz's fastest path want (see the image
+/// design notes). Alpha is real: `gradient_frame` writes 0xFF… for opaque.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Pixel(pub u32);
+
+impl From<Rgba<u8>> for Pixel {
+    /// Straight (non-premultiplied) RGBA → the canonical premultiplied
+    /// contract. Premultiplying at ingest is what keeps scaling and
+    /// blending fringe-free later.
+    fn from(value: Rgba<u8>) -> Self {
+        let [r, g, b, a] = value.0;
+        let mul = |c: u8| ((c as u32 * a as u32 + 127) / 255) as u8;
+        Self(
+            ((a as u32) << 24)
+                | ((mul(r) as u32) << 16)
+                | ((mul(g) as u32) << 8)
+                | mul(b) as u32,
+        )
+    }
+}
+
+/// Decode an image file into an ImageSource — ONCE per process, keyed by
+/// path. `ui!` expressions re-evaluate on every render (the macro is
+/// syntax, not a define-once construct), so this memo is what makes
+/// `source(file(...))` cheap: the first render decodes, every later render
+/// just Arc-clones the cached frame. Missing or undecodable files fail
+/// loudly, with the path named.
+pub fn load_image_file(path: impl AsRef<Path>) -> ImageSource {
+    thread_local! {
+        static CACHE: RefCell<HashMap<PathBuf, Arc<BlitFrame>>> = RefCell::new(HashMap::new());
+    }
+    let path = path.as_ref();
+    CACHE.with(|cache| {
+        if let Some(frame) = cache.borrow().get(path) {
+            return ImageSource::Frame(frame.clone());
+        }
+        let img = image::ImageReader::open(path)
+            .unwrap_or_else(|e| panic!("cannot open image {}: {e}", path.display()))
+            .decode()
+            .unwrap_or_else(|e| panic!("cannot decode image {}: {e}", path.display()));
+        let mut frame = BlitFrame::new(img.width() as usize, img.height() as usize);
+        let pixels: Vec<Pixel> = img.pixels().map(|(_, _, p)| p.into()).collect();
+        frame.pixels = Arc::new(pixels);
+        let frame = Arc::new(frame);
+        cache.borrow_mut().insert(path.to_path_buf(), frame.clone());
+        ImageSource::Frame(frame)
+    })
+}
 
 /// Somewhere to hold some pixel data, to then add as src on an Image.
 /// (`source` on the Image element names the slot). `version` ticks per
@@ -822,11 +874,15 @@ mod tests {
 
     #[test]
     fn image_source_sugar_forms_lower_to_the_enum() {
-        // file(...) — any path-ish value
-        let el = crate::ui! { Image source(file("logo.png")) };
+        // file(...) decodes a REAL file (memoised by path) into a frame
+        let path = std::env::temp_dir().join("wo_sugar_forms.png");
+        image::RgbaImage::from_pixel(2, 1, Rgba([1, 2, 3, 255]))
+            .save(&path)
+            .unwrap();
+        let el = crate::ui! { Image source(file(path.to_str().unwrap())) };
         assert!(
-            matches!(el.props.get_source(PropType::Source), Some(ImageSource::File(p)) if p == &PathBuf::from("logo.png")),
-            "file(...) must land as ImageSource::File: {:?}",
+            matches!(el.props.get_source(PropType::Source), Some(ImageSource::Frame(_))),
+            "file(...) must land as a decoded ImageSource::Frame: {:?}",
             el.props.get_source(PropType::Source)
         );
 
@@ -868,8 +924,10 @@ mod tests {
         // what lets reconciliation leave a widget completely alone
         let state = crate::state::State::default();
         let ctx = crate::state::Ctx { state: &state };
-        let a = crate::ui! { Button on_click(ctx.effect(|_s: &crate::state::State| ())) { Text "ok" } };
-        let b = crate::ui! { Button on_click(ctx.effect(|_s: &crate::state::State| ())) { Text "ok" } };
+        let a =
+            crate::ui! { Button on_click(ctx.effect(|_s: &crate::state::State| ())) { Text "ok" } };
+        let b =
+            crate::ui! { Button on_click(ctx.effect(|_s: &crate::state::State| ())) { Text "ok" } };
         assert_eq!(a, b, "fresh handlers every render must still compare equal");
 
         // changed output must compare UNEQUAL
@@ -878,7 +936,49 @@ mod tests {
         let d = crate::ui! { Div width(2.) { { crate::ui! { Text "x" } } } };
         let e = crate::ui! { Div width(3.) { { crate::ui! { Text "x" } } } };
         assert_ne!(d, e, "different props are different output");
-        assert_eq!(d, crate::ui! { Div width(2.) { { crate::ui! { Text "x" } } } });
+        assert_eq!(
+            d,
+            crate::ui! { Div width(2.) { { crate::ui! { Text "x" } } } }
+        );
+    }
+
+    #[test]
+    fn pixel_premultiplies_straight_rgba() {
+        // the canonical contract: 0xAARRGGBB, PREMULTIPLIED
+        assert_eq!(
+            Pixel::from(Rgba([255, 255, 255, 128])),
+            Pixel(0x8080_8080),
+            "half-transparent white premultiplies to half intensity"
+        );
+        assert_eq!(
+            Pixel::from(Rgba([0x11, 0x22, 0x33, 255])),
+            Pixel(0xFF11_2233),
+            "opaque passes through unchanged"
+        );
+        assert_eq!(
+            Pixel::from(Rgba([255, 0, 0, 0])),
+            Pixel(0x0000_0000),
+            "fully transparent collapses to zero (the premultiplied rule)"
+        );
+    }
+
+    #[test]
+    fn image_file_loads_once() {
+        // round-trip a real tiny PNG through the loader's cache
+        let path = std::env::temp_dir().join("wo_image_file_loads_once.png");
+        image::RgbaImage::from_pixel(1, 1, Rgba([10, 20, 30, 255]))
+            .save(&path)
+            .unwrap();
+        let a = load_image_file(&path);
+        let b = load_image_file(&path);
+        let (ImageSource::Frame(a), ImageSource::Frame(b)) = (&a, &b) else {
+            panic!("file sources must load as frames");
+        };
+        assert!(
+            Arc::ptr_eq(a, b),
+            "the second load must be the SAME cached frame, not a re-decode"
+        );
+        assert_eq!(a.pixels[0], Pixel(0xFF0A_141E));
     }
 
     #[test]
