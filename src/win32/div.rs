@@ -88,6 +88,7 @@ pub fn create_div(
     }
 }
 
+// little experiment, still in progress...
 fn try_wic() {
     unsafe {
         let wic_imaging_factory: IWICImagingFactory =
@@ -213,9 +214,8 @@ impl Div {
 
         // GDI's stretch mangles LARGE sources — probe-verified: downsizing
         // anything over ~4096px wide samples the wrong source pixels
-        // (queensland.jpg came out neon with a seam; ronda.jpg at a 2x
-        // ratio was fine). The reliable pair is: scale in software once per
-        // (frame, box), then blit 1:1 — which is exact at any size.
+        // Solution: scale in software once per
+        // (frame, box), then blit 1:1
         let key = (frame.pixels.as_ptr() as usize, dw, dh);
         let mut scaled = self.scaled.borrow_mut();
         if scaled.as_ref().map(|(k, _)| *k) != Some(key) {
@@ -277,9 +277,8 @@ fn scale_bgra(src: &[Pixel], w: usize, h: usize, dw: usize, dh: usize) -> Vec<Pi
                     n += 1;
                 }
             }
-            out[dy * dw + dx] = Pixel(
-                (((a / n) << 24) | ((r / n) << 16) | ((g / n) << 8) | (b / n)) as u32,
-            );
+            out[dy * dw + dx] =
+                Pixel((((a / n) << 24) | ((r / n) << 16) | ((g / n) << 8) | (b / n)) as u32);
         }
     }
     out

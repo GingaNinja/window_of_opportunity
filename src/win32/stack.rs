@@ -67,6 +67,7 @@ pub fn arrange(el: &Element, widget: &mut Widget, area: Rect) {
     // place_hwnd)
     place_hwnd(*hwnd, x, y, w, h);
 
+
     // children live in the container's CLIENT space, so the inner box is
     // 0-based no matter where the container sits in its own parent
     let inner = Rect {

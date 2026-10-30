@@ -1,12 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-use std::sync::Arc;
 
-use window_of_opportunity::{
-    app::Application,
-    component::Component,
-    element::{BlitFrame, Pixel},
-    ui,
-};
+use std::path::PathBuf;
+
+use window_of_opportunity::{app::Application, component::Component, ui};
 
 /// A component with its own state: the count lives in a keyed slot that
 /// survives re-renders and full remounts — this is the hooks model.
@@ -99,46 +95,23 @@ impl Component for Typing {
 }
 
 #[derive(Debug, Default)]
-struct Imaging {}
+struct Imaging {
+    filename: PathBuf,
+    sourced: String,
+}
 
 impl Component for Imaging {
     fn render(
         &self,
-        ctx: &window_of_opportunity::state::Ctx,
+        _: &window_of_opportunity::state::Ctx,
         _children: Vec<Box<window_of_opportunity::element::Element>>,
     ) -> Box<window_of_opportunity::element::Element> {
-        // --- the RepaintHandle in action -------------------------------
-        // A ticker thread says "hey, re-render" thirty times a second, and
-        // this render simply SAMPLES THE CLOCK for the gradient — the
-        // content is derived at render time, the handle is only the
-        // invalidation signal. That's the whole idea: whatever changed
-        // (time, a sensor, a stream) lives outside the framework; the
-        // handle just tells it to run again. `repaint(repaint)` on the
-        // Image binds the same handle to that element, so handle.repaint()
-        // redraws JUST it (no render) and handle.rerender() runs the loop.
-        let repaint = ctx.use_repaint("anim");
-        let (w, h) = ctx.use_state("image/size", || (640., 820.));
-        ctx.use_state("ticker", || {
-            std::thread::spawn(move || {
-                loop {
-                    std::thread::sleep(std::time::Duration::from_millis(1000 / 30));
-                    repaint.rerender();
-                }
-            });
-        });
-        let start = ctx.use_state("start", std::time::Instant::now);
-        let offset = start.elapsed().as_millis() / 5;
-        // The frame follows the box — but at QUARTER resolution, stretched
-        // back to full size by the blit. Per-render pixel generation is
-        // O(area): generating box-sized frames every tick saturates the UI
-        // thread as the window grows (maximize on a 5K display made the
-        // app stop responding to input in debug builds). Fit modes + a
-        // cached scaled bitmap are the real answer; quarter-res keeps the
-        // box-following demo honest and affordable.
-        let img = gradient_frame(offset as usize, (w / 4.) as usize, (h / 4.) as usize);
-
-        ui! { Image on_resize(|state, w, h|
-        state.update("image/size", |d|  *d = (w, h))) source(frame(img)) repaint(repaint) grow(true) {} }
+        ui! {
+            Div direction("column") grow(true) {
+                { Text format!("Image source: {}", self.sourced)}
+                { Image source(file(&self.filename)) grow(true) {} }
+            }
+        }
     }
 }
 
@@ -153,15 +126,33 @@ impl Component for Window {
     ) -> Box<window_of_opportunity::element::Element> {
         let (w, h) = ctx.use_state("window/size", || (640., 820.));
         let first = ctx.use_state("first", || true);
-        // per-div resize handling: the black div's on_resize reports its
-        // own box (logical units, like the window's on_resize), and its
-        // Text renders it back — resize the window to watch it track.
-        let (div_w, div_h) = ctx.use_state("black/size", || (0., 0.));
 
         let title = if first {
             "One message"
         } else {
             "Another message"
+        };
+
+        // executable will by default open from where the command line is, not the exe,
+        // and certainly not in the source folder. Get to source...
+        let examples_folder = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("..")
+            .join("..")
+            .join("..")
+            .join("examples");
+        let image: PathBuf = if first {
+            examples_folder.join("camels.jpg")
+        } else {
+            examples_folder.join("queensland.jpg")
+        };
+
+        let sourced: String = if first {
+            "https://unsplash.com/photos/three-camels-looking-down-k1LDyXvk3HA".into()
+        } else {
+            "https://unsplash.com/photos/story-bridge-and-felons-brewing-co-yWa4EBPmz7o".into()
         };
 
         ui! {
@@ -170,12 +161,7 @@ impl Component for Window {
                        state.update("window/size", |s: &mut (f64, f64)| *s = (w, h))) {
                 { Div direction("column") gap(10.) grow(true) padding(10., 20., 30., 40.)  { // note, we have t, r, b, l padding
                     { Pane }
-                    { Div height(80.)
-                          on_resize(|state, w, h|
-                              state.update("black/size", |s: &mut (f64, f64)| *s = (w, h))) {
-                        // (no background here: win32 Labels don't honor a
-                        // color prop yet, so black-on-black would vanish)
-                        { Text format!("div sees its own size: {:.0} x {:.0}", div_w, div_h) } } }
+                    { Div height(80.) background("black") }
                     { Div direction("row") gap(10.) height(60.) {
                         { Button { Text "Hello, and this should mean a bigger button" } }
                         { Button { Text "Two" } }
@@ -183,29 +169,11 @@ impl Component for Window {
                     } }
                     { Counter thing("blah".into())} // a prop into counter
                     { Typing }
-                    { Imaging }
+                    { Imaging filename(image) sourced(sourced)}
                 } }
             }
         }
     }
-}
-
-/// A gradient that shifts with `offset` — derived at render time like any
-/// good React output. `version` ticks with the offset so the image widget
-/// can tell frames apart (and skip re-blitting unchanged ones).
-fn gradient_frame(offset: usize, width: usize, height: usize) -> BlitFrame {
-    let mut pixels = vec![Pixel(0); width * height];
-    for y in 0..height {
-        for x in 0..width {
-            let b = ((x + offset) & 0xff) as u32;
-            let g = (y & 0xff) as u32;
-            pixels[y * width + x] = Pixel(0xFF00_0000 | (g << 8) | b);
-        }
-    }
-    let mut frame = BlitFrame::new(width, height);
-    frame.pixels = Arc::new(pixels);
-    frame.version = offset as u64;
-    frame
 }
 
 fn main() {

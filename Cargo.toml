@@ -74,3 +74,7 @@ image-rayon = ["image/rayon"]
 
 [dependencies]
 image = { version = "0.25.10", default-features = false }
+# colour management: the image crate decodes pixels and ignores embedded
+# ICC profiles — qcms (Mozilla's, ~tiny) applies them so Display-P3 / Adobe
+# RGB photos don't render with wrong colours
+qcms = "0.3"

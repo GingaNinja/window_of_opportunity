@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use image::{GenericImageView, Rgba};
+use image::{ImageDecoder, Rgba};
 
 use crate::{component::Component, state::Handler};
 
@@ -735,6 +735,36 @@ impl From<Rgba<u8>> for Pixel {
     }
 }
 
+/// Apply an embedded ICC colour profile to straight RGBA8 bytes, in place
+/// — BEFORE the premultiply pass. The `image` crate decodes pixels and
+/// silently ignores profiles, so an Adobe RGB / Display P3 photo renders
+/// with wrong colours (this is what made scenery.jpg look off). sRGB and
+/// unreadable profiles are skipped: unmanaged beats mangled.
+fn colour_manage(rgba: &mut [u8], icc: Option<&[u8]>) {
+    let Some(bytes) = icc else {
+        return;
+    };
+    let Some(profile) = qcms::Profile::new_from_slice(bytes, false) else {
+        println!("warning: unreadable ICC profile — showing colours unmanaged");
+        return;
+    };
+    if profile.is_sRGB() {
+        return;
+    }
+    let mut out = qcms::Profile::new_sRGB();
+    out.precache_output_transform();
+    let Some(transform) = qcms::Transform::new(
+        &profile,
+        &out,
+        qcms::DataType::RGBA8,
+        qcms::Intent::RelativeColorimetric,
+    ) else {
+        println!("warning: cannot build an ICC transform — showing colours unmanaged");
+        return;
+    };
+    transform.apply(rgba);
+}
+
 /// Decode an image file into an ImageSource — ONCE per process, keyed by
 /// path. `ui!` expressions re-evaluate on every render (the macro is
 /// syntax, not a define-once construct), so this memo is what makes
@@ -750,12 +780,24 @@ pub fn load_image_file(path: impl AsRef<Path>) -> ImageSource {
         if let Some(frame) = cache.borrow().get(path) {
             return ImageSource::Frame(frame.clone());
         }
-        let img = image::ImageReader::open(path)
+        let mut decoder = image::ImageReader::open(path)
             .unwrap_or_else(|e| panic!("cannot open image {}: {e}", path.display()))
-            .decode()
+            .into_decoder()
             .unwrap_or_else(|e| panic!("cannot decode image {}: {e}", path.display()));
+        // the colour profile comes from the DECODER — DynamicImage drops it
+        let icc = decoder.icc_profile().ok().flatten();
+        let img = image::DynamicImage::from_decoder(decoder)
+            .unwrap_or_else(|e| panic!("cannot decode image {}: {e}", path.display()));
+        let mut rgba = img.to_rgba8().into_raw();
+        colour_manage(&mut rgba, icc.as_deref());
+        // bulk-convert + premultiply in one pass
+        let pixels: Vec<Pixel> = rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| Pixel::from(Rgba([c[0], c[1], c[2], c[3]])))
+            .collect();
         let mut frame = BlitFrame::new(img.width() as usize, img.height() as usize);
-        let pixels: Vec<Pixel> = img.pixels().map(|(_, _, p)| p.into()).collect();
         frame.pixels = Arc::new(pixels);
         let frame = Arc::new(frame);
         cache.borrow_mut().insert(path.to_path_buf(), frame.clone());
@@ -985,6 +1027,15 @@ mod tests {
             "the second load must be the SAME cached frame, not a re-decode"
         );
         assert_eq!(a.pixels[0], Pixel(0xFF0A_141E));
+    }
+
+    #[test]
+    fn colour_manage_skips_when_it_should() {
+        let mut px = [10u8, 20, 30, 255];
+        colour_manage(&mut px, None);
+        assert_eq!(px, [10, 20, 30, 255], "no profile: untouched");
+        colour_manage(&mut px, Some(b"not an icc profile"));
+        assert_eq!(px, [10, 20, 30, 255], "garbage profile: untouched");
     }
 
     #[test]
